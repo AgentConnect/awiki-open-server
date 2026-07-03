@@ -1,0 +1,20 @@
+[Unit]
+Description=Awiki Open Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=awiki-open-server
+Group=awiki-open-server
+WorkingDirectory=/opt/awiki-open-server
+EnvironmentFile=/etc/awiki-open-server/awiki-open-server.env
+Environment=PYTHONPATH=/opt/awiki-open-server/src
+ExecStart=/opt/awiki-open-server/.venv/bin/python -m uvicorn awiki_open_server.app.main:create_app --factory --host 127.0.0.1 --port 8766
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

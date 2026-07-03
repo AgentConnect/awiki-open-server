@@ -1,0 +1,138 @@
+# Example HTTPS server block for publishing awiki-open-server as rwiki.cn.
+# This intentionally points rwiki.cn to awiki-open-server, not to awiki.info
+# user-service or message-service.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name rwiki.cn www.rwiki.cn;
+    return 301 https://rwiki.cn$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name rwiki.cn www.rwiki.cn;
+
+    ssl_certificate /etc/nginx/ssl/rwiki.cn.pem;
+    ssl_certificate_key /etc/nginx/ssl/rwiki.cn.key;
+
+    client_max_body_size 20m;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-Host $host;
+
+    location = /healthz {
+        proxy_pass http://127.0.0.1:8766/healthz;
+    }
+
+    location = /health {
+        proxy_pass http://127.0.0.1:8766/health;
+    }
+
+    location = /.well-known/did.json {
+        proxy_pass http://127.0.0.1:8766/.well-known/did.json;
+    }
+
+    location = /anp-im/rpc {
+        proxy_pass http://127.0.0.1:8766/anp-im/rpc;
+    }
+
+    location = /im/rpc {
+        proxy_pass http://127.0.0.1:8766/im/rpc;
+    }
+
+    location = /did-auth/rpc {
+        proxy_pass http://127.0.0.1:8766/did-auth/rpc;
+    }
+
+    location = /did-verify/rpc {
+        proxy_pass http://127.0.0.1:8766/did-verify/rpc;
+    }
+
+    location = /did/profile/rpc {
+        proxy_pass http://127.0.0.1:8766/did/profile/rpc;
+    }
+
+    location = /handle/rpc {
+        proxy_pass http://127.0.0.1:8766/handle/rpc;
+    }
+
+    location = /content/rpc {
+        proxy_pass http://127.0.0.1:8766/content/rpc;
+    }
+
+    location = /site/rpc {
+        proxy_pass http://127.0.0.1:8766/site/rpc;
+    }
+
+    location = /me {
+        proxy_pass http://127.0.0.1:8766/me;
+    }
+
+    location = /me/rpc {
+        proxy_pass http://127.0.0.1:8766/me/rpc;
+    }
+
+    location = /users/rpc {
+        proxy_pass http://127.0.0.1:8766/users/rpc;
+    }
+
+    location = /did/relationships/rpc {
+        proxy_pass http://127.0.0.1:8766/did/relationships/rpc;
+    }
+
+    location = /im/ws {
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_pass http://127.0.0.1:8766/im/ws;
+    }
+
+    location ^~ /.well-known/handle/ {
+        proxy_pass http://127.0.0.1:8766;
+    }
+
+    location ^~ /user-service/ {
+        proxy_pass http://127.0.0.1:8766;
+    }
+
+    location ^~ /objects/ {
+        proxy_pass http://127.0.0.1:8766;
+    }
+
+    location ^~ /content/ {
+        proxy_pass http://127.0.0.1:8766;
+    }
+
+    location ^~ /dids/resolve/ {
+        proxy_pass http://127.0.0.1:8766;
+    }
+
+    location ^~ /profiles/ {
+        proxy_pass http://127.0.0.1:8766;
+    }
+
+    location ^~ /users/ {
+        proxy_pass http://127.0.0.1:8766;
+    }
+
+    location = / {
+        proxy_pass http://127.0.0.1:8766;
+    }
+
+    location ~ ^/pages/[^/]+\.md$ {
+        proxy_pass http://127.0.0.1:8766;
+    }
+
+    location ~ ^/(.+)/did\.json$ {
+        proxy_pass http://127.0.0.1:8766;
+    }
+
+    location / {
+        return 404;
+    }
+}

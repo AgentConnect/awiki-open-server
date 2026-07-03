@@ -1,0 +1,24 @@
+[project]
+name = "awiki-open-server"
+version = "0.1.0"
+description = "Single-process Awiki Community Server MVP"
+requires-python = ">=3.10"
+dependencies = [
+  "base58",
+  "cryptography",
+  "fastapi",
+  "jcs",
+  "pydantic",
+  "uvicorn",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx",
+  "pytest",
+  "pytest-asyncio",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
