@@ -67,10 +67,10 @@ Harness：`awiki-harness/`
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 01 | ANP SDK 0.8.8 接入与协议 adapter | 无 | A | 否 | agent-protocol | 无 | `pyproject.toml`, `service_identity.py`, `services.py` 协议函数 | SDK 依赖、adapter、parity tests | [steps/01-anp-sdk-adapter.md](steps/01-anp-sdk-adapter.md) | 必须 | SDK parity gate | done |
 | 02 | 路径配置与公开 endpoint 对齐 | Step 01 | B | 是 | agent-routing | Step 03 | `app/routes.py`, `app/settings.py`, `deploy/*` | 配置路径真实挂载，文档同步 | [steps/02-route-config-alignment.md](steps/02-route-config-alignment.md) | 必须 | Route config gate | done |
-| 03 | User Service 兼容模块拆分 | Step 01 | B | 是 | agent-user-compat | Step 02 | `services.py` identity/profile/handle/users/auth compat 区域 | `identity/` 或 `user_compat/` 模块 | [steps/03-user-service-compat-refactor.md](steps/03-user-service-compat-refactor.md) | 必须 | User compat gate | pending |
-| 04 | Messaging 与 attachment 模块拆分 | Step 02, Step 03 | C | 否 | agent-messaging | 无 | `services.py` direct/group/sync/attachment, `storage/db.py` | `messaging/`, `attachments/`, storage helpers | [steps/04-messaging-attachment-refactor.md](steps/04-messaging-attachment-refactor.md) | 必须 | Messaging gate | pending |
-| 05 | 测试拆分与验证矩阵收敛 | Step 04 | D | 是 | agent-tests | Step 06 | `tests/` | 测试按域拆分、helpers 抽取 | [steps/05-test-suite-split.md](steps/05-test-suite-split.md) | 必须 | Full local gate | pending |
-| 06 | 文档、部署示例与最终 L3 验证 | Step 04 | D | 是 | agent-docs | Step 05 | `README.md`, `AGENTS.md`, `deploy/*`, Plan docs | docs 同步、rwiki.cn/public gate 证据 | [steps/06-docs-final-verification.md](steps/06-docs-final-verification.md) | 必须 | Final L3 gate | pending |
+| 03 | User Service 兼容模块拆分 | Step 01 | B | 是 | agent-user-compat | Step 02 | `services.py` identity/profile/handle/users/auth compat 区域 | `identity/` 或 `user_compat/` 模块 | [steps/03-user-service-compat-refactor.md](steps/03-user-service-compat-refactor.md) | 必须 | User compat gate | done |
+| 04 | Messaging 与 attachment 模块拆分 | Step 02, Step 03 | C | 否 | agent-messaging | 无 | `services.py` direct/group/sync/attachment, `storage/db.py` | `messaging/`, `attachments/`, storage helpers | [steps/04-messaging-attachment-refactor.md](steps/04-messaging-attachment-refactor.md) | 必须 | Messaging gate | done |
+| 05 | 测试拆分与验证矩阵收敛 | Step 04 | D | 是 | agent-tests | Step 06 | `tests/` | 测试按域拆分、helpers 抽取 | [steps/05-test-suite-split.md](steps/05-test-suite-split.md) | 必须 | Full local gate | done |
+| 06 | 文档、部署示例与最终 L3 验证 | Step 04 | D | 是 | agent-docs | Step 05 | `README.md`, `AGENTS.md`, `deploy/*`, Plan docs | docs 同步、rwiki.cn/public gate 证据 | [steps/06-docs-final-verification.md](steps/06-docs-final-verification.md) | 必须 | Final L3 gate | done |
 
 ## 7. 并行执行与多智能体分工
 
@@ -198,14 +198,14 @@ Harness：`awiki-harness/`
 | 层级 | 适用 Step / 并行组 | 命令 / 检查 | 运行时机 | 预期证据 | 门禁结果 |
 |---|---|---|---|---|---|
 | Step Unit | Step 01 | `PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_protocol_anp_sdk.py -q` | Step 01 commit 前 | SDK parity pass；标准 `PYTHONPATH=src` 需环境安装 `anp==0.8.8` | pass_with_explicit_sdk_path |
-| Step Unit | Step 02 | route config focused tests | Step 02 commit 前 | custom ANP path 和 DID document endpoint 一致 | pending |
-| Step Unit | Step 03 | User compat focused tests | Step 03 commit 前 | DID/Auth/Profile/Handle/Users shape 不变 | pending |
-| Step Integration | Step 04 | `PYTHONPATH=src python3 -m pytest tests/test_direct_messages.py tests/test_group_participant.py tests/test_attachments.py -q` | Step 04 commit 前 | messaging/attachment pass | pending |
-| Full Local | Step 05 | `PYTHONPATH=src python3 -m pytest tests -q` | Step 05 commit 前 | 全量 pass；当前本机需先安装 `anp==0.8.8`，否则版本断言失败 | pending |
-| CLI Local | Final | `PYTHONPATH=src python3 scripts/awiki_open_cli.py smoke-rust-cli-local --awiki-cli-bin <bin> --data-root /tmp/awiki-open-server-anp-sdk-rust --clean` | Final | Rust CLI pass 或记录 blocker | pending |
-| Public | Final | `AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1 PYTHONPATH=src python3 -m pytest tests/test_rwiki_cn_system.py -q` | Final | rwiki.cn public pass 或记录 blocker | pending |
-| Public | Final | `PYTHONPATH=src python3 scripts/awiki_open_cli.py verify-public --base-url https://rwiki.cn --did-domain rwiki.cn` | Final | ok=true | pending |
-| Docs | Final | Markdown path/link spot check | Final | 文档路径存在 | pending |
+| Step Unit | Step 02 | route config focused tests | Step 02 commit 前 | custom ANP path 和 DID document endpoint 一致 | pass_with_explicit_sdk_path |
+| Step Unit | Step 03 | User compat focused tests | Step 03 commit 前 | DID/Auth/Profile/Handle/Users shape 不变 | pass_with_explicit_sdk_path |
+| Step Integration | Step 04 | `PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_direct_messages.py tests/test_group_participant.py tests/test_attachments.py -q` | Step 04 commit 前 | messaging/attachment pass | pass_with_explicit_sdk_path |
+| Full Local | Step 05 | `PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` | Step 05 commit 前 | 全量 pass；当前本机需先安装 `anp==0.8.8`，否则版本断言失败 | pass_with_explicit_sdk_path |
+| CLI Local | Final | `PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-rust-cli-local --awiki-cli-bin ../awiki-cli-rs2/target/debug/awiki-cli --data-root /tmp/awiki-open-server-final-rust --clean` | Final | Rust CLI pass | pass_with_explicit_sdk_path |
+| Public | Final | `AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1 PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_rwiki_cn_system.py -q` | Final | rwiki.cn public pass | pass_with_explicit_sdk_path |
+| Public | Final | `PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py verify-public --base-url https://rwiki.cn --did-domain rwiki.cn` | Final | ok=true | pass_with_explicit_sdk_path |
+| Docs | Final | Markdown path/link spot check | Final | 文档路径存在 | pass |
 
 ## 13. 文档更新
 
