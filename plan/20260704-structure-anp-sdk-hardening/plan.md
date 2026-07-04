@@ -4,7 +4,7 @@
 DOC：`awiki-open-server/plan/20260704-structure-anp-sdk-hardening/`  
 Harness：`awiki-harness/`  
 创建时间：2026-07-04  
-恢复指针：Step 01 已实现并通过 Review/验证，下一步创建 Step 01 commit；commit 后进入 Step 02/03 Wave B
+恢复指针：Step 01 已完成并提交 `6d8c1cf`；下一步进入 Step 02/03 Wave B
 
 ## 1. 目标
 
@@ -65,7 +65,7 @@ Harness：`awiki-harness/`
 
 | Step | 标题 | 依赖 | 并行组 | Parallel-safe | 建议 Agent | 可并行对象 | 互斥资源 / 冲突路径 | 产出 | 小 Plan 文档 | Commit gate | 合并 / 验证门禁 | 状态 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 01 | ANP SDK 0.8.8 接入与协议 adapter | 无 | A | 否 | agent-protocol | 无 | `pyproject.toml`, `service_identity.py`, `services.py` 协议函数 | SDK 依赖、adapter、parity tests | [steps/01-anp-sdk-adapter.md](steps/01-anp-sdk-adapter.md) | 必须 | SDK parity gate | reviewed |
+| 01 | ANP SDK 0.8.8 接入与协议 adapter | 无 | A | 否 | agent-protocol | 无 | `pyproject.toml`, `service_identity.py`, `services.py` 协议函数 | SDK 依赖、adapter、parity tests | [steps/01-anp-sdk-adapter.md](steps/01-anp-sdk-adapter.md) | 必须 | SDK parity gate | done |
 | 02 | 路径配置与公开 endpoint 对齐 | Step 01 | B | 是 | agent-routing | Step 03 | `app/routes.py`, `app/settings.py`, `deploy/*` | 配置路径真实挂载，文档同步 | [steps/02-route-config-alignment.md](steps/02-route-config-alignment.md) | 必须 | Route config gate | pending |
 | 03 | User Service 兼容模块拆分 | Step 01 | B | 是 | agent-user-compat | Step 02 | `services.py` identity/profile/handle/users/auth compat 区域 | `identity/` 或 `user_compat/` 模块 | [steps/03-user-service-compat-refactor.md](steps/03-user-service-compat-refactor.md) | 必须 | User compat gate | pending |
 | 04 | Messaging 与 attachment 模块拆分 | Step 02, Step 03 | C | 否 | agent-messaging | 无 | `services.py` direct/group/sync/attachment, `storage/db.py` | `messaging/`, `attachments/`, storage helpers | [steps/04-messaging-attachment-refactor.md](steps/04-messaging-attachment-refactor.md) | 必须 | Messaging gate | pending |
@@ -112,7 +112,7 @@ Harness：`awiki-harness/`
 
 | Step | 状态 | Agent / Owner | 并行组 | 分支 / worktree | 基线 commit | 开始时间 | 完成时间 | Commit | Review 证据 | 验证证据 | 合并状态 | 门禁状态 | 下一步 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 01 | reviewed | agent-protocol | A | main | 2b7c467 | 2026-07-04 10:26:58 +0800 | 2026-07-04 10:42:05 +0800 | pending | 本地 review + 并行 reviewer 通过：SDK import 集中在 adapter；未扩大 `/anp-im/rpc` 白名单；未引入手机/邮箱/Aliyun/E2EE/federation/group management；删除旧手写 HTTP Signature / origin proof helper；已补 HTTP signature SDK 异常映射和负例测试。 | `PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 56 passed, 2 skipped；compileall pass；cross-domain local smoke ok=true。标准 `PYTHONPATH=src` 被本机 `anp 0.6.8` 阻断，安装 0.8.8 受 PyPI SSL / hatchling 限制。 | not_committed | pass_with_explicit_sdk_path | 创建 Step 01 commit |
+| 01 | done | agent-protocol | A | main | 2b7c467 | 2026-07-04 10:26:58 +0800 | 2026-07-04 10:42:05 +0800 | 6d8c1cf | 本地 review + 并行 reviewer 通过：SDK import 集中在 adapter；未扩大 `/anp-im/rpc` 白名单；未引入手机/邮箱/Aliyun/E2EE/federation/group management；删除旧手写 HTTP Signature / origin proof helper；已补 HTTP signature SDK 异常映射和负例测试。 | `PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 56 passed, 2 skipped；compileall pass；cross-domain local smoke ok=true。标准 `PYTHONPATH=src` 被本机 `anp 0.6.8` 阻断，安装 0.8.8 受 PyPI SSL / hatchling 限制。 | committed | pass_with_explicit_sdk_path | 进入 Step 02/03 Wave B |
 | 02 | pending | agent-routing | B | TBD | TBD | TBD | TBD | TBD | TBD | TBD | not_started | pending | 等 Step 01 |
 | 03 | pending | agent-user-compat | B | TBD | TBD | TBD | TBD | TBD | TBD | TBD | not_started | pending | 等 Step 01 |
 | 04 | pending | agent-messaging | C | TBD | TBD | TBD | TBD | TBD | TBD | TBD | not_started | pending | 等 Wave B |
@@ -247,7 +247,7 @@ Harness：`awiki-harness/`
 ## 18. Step 01 执行记录
 
 - 2026-07-04 10:26:58 +0800：启动 Step 01。
-- 2026-07-04 10:42:05 +0800：完成实现、Review 和本地验证，等待提交。
+- 2026-07-04 10:42:05 +0800：完成实现、Review 和本地验证。
 - 变更摘要：新增 `awiki-open-server/src/awiki_open_server/protocol/anp_adapter.py`，固定 `anp==0.8.8`，将 service HTTP Signature、Content-Digest、origin proof 验证切到 adapter，并补充 `awiki-open-server/tests/test_protocol_anp_sdk.py`，并补充 HTTP signature 负例测试。
 - 验证证据：`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 56 passed, 2 skipped；`PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-cross-domain-local --data-root /tmp/awiki-open-server-step01-cross --clean` ok=true。
 - 环境风险：当前机器默认 `anp==0.6.8`，标准 `PYTHONPATH=src` 被 adapter 版本断言阻断；安装 `anp==0.8.8` 的 PyPI 和本地 build 路径分别受 SSL 与 `hatchling` 限制。

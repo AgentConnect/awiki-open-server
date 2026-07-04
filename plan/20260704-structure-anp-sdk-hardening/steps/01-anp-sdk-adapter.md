@@ -2,20 +2,20 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：01  
-状态：reviewed
+状态：done
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | reviewed |
+| Status | done |
 | Branch | main |
 | Started | 2026-07-04 10:26:58 +0800 |
 | Completed | 2026-07-04 10:42:05 +0800 |
-| Commit | pending |
+| Commit | 6d8c1cf |
 | Review evidence | 本地 review + 并行 reviewer 通过：ANP SDK import 只在 `awiki-open-server/src/awiki_open_server/protocol/anp_adapter.py`；未扩大 public `/anp-im/rpc` 白名单；未引入手机/邮箱/Aliyun/E2EE/federation/group management；`service_identity.py` 删除旧手写 HTTP Signature / origin proof helper 并保留 DID document 本地生成；已补 `_sdk_verify_http_message_signature` 异常映射和 malformed/label mismatch/unauthorized key 负例。 |
 | Verification evidence | `PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_protocol_anp_sdk.py -q` pass；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 56 passed, 2 skipped；`PYTHONPATH=../anp/anp:src python3 -m compileall -q src scripts tests` pass；`PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-cross-domain-local --data-root /tmp/awiki-open-server-step01-cross --clean` ok=true。标准 `PYTHONPATH=src` gate 当前被本机已安装 `anp 0.6.8` 版本断言阻断；PyPI 与本地 build install 受 SSL / hatchling 环境限制。 |
-| Next action | 创建 Step 01 聚焦 commit，然后进入 Step 02/03 并行 Wave B |
+| Next action | 进入 Step 02/03 并行 Wave B |
 | Assigned agent | agent-protocol |
 | Parallel group | A |
 | Parallel safe | no |
@@ -25,7 +25,7 @@ Step index：01
 | Worktree / branch | main |
 | Merge gate | SDK parity gate |
 | Verification gate | focused protocol tests + compileall |
-| Gate status | pass with explicit `../anp/anp` SDK 0.8.8 path; standard env blocked by installed `anp 0.6.8` |
+| Gate status | pass with explicit `../anp/anp` SDK 0.8.8 path; committed as `6d8c1cf`; standard env blocked by installed `anp 0.6.8` |
 
 ## 2. 目标
 
@@ -81,7 +81,7 @@ Step index：01
 - [x] service HTTP Signature 和 origin proof 验证使用 SDK 0.8.8。
 - [x] 现有跨域 direct 本地 smoke 仍通过。
 - [x] Review 发现已经修复或记录。
-- [ ] 本步骤在进入下一步前已创建聚焦 commit。
+- [x] 本步骤在进入下一步前已创建聚焦 commit。
 
 ## 8. 验证方式
 
