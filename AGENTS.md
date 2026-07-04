@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository implements `awiki-open-server`, a single-process Awiki Community Server MVP. Application code lives under `src/awiki_open_server/`: `app/` contains FastAPI wiring, routes, settings, and realtime helpers; `storage/` owns SQLite access; `shared/` contains JSON-RPC, ID, and error utilities; `services.py` holds the current domain service layer. Tests are under `tests/`, local smoke tooling is in `scripts/`, deployment examples are in `deploy/`, and product/implementation plans are in `require.md` and `plan/`.
+This repository implements `awiki-open-server`, a single-process Awiki Community Server MVP. Application code lives under `src/awiki_open_server/`: `app/` contains FastAPI wiring, routes, settings, and realtime helpers; `protocol/anp_adapter.py` is the only ANP SDK adapter; `messaging/` owns direct, group participant, sync, and read-state handlers; `attachments/` owns local upload slots, object commits, and download tickets; `user_compat/` owns local User Service compatibility; `storage/` owns SQLite access; and `shared/` contains JSON-RPC, ID, error, and runtime helpers. `services.py` is a compatibility facade plus remaining content/site/DID relationship handlers, not the place for new domain logic. Tests are under `tests/`, local smoke tooling is in `scripts/`, deployment examples are in `deploy/`, and product/implementation plans are in `require.md` and `plan/`.
 
 ## Build, Test, and Development Commands
 
@@ -11,6 +11,8 @@ Install runtime and test dependencies:
 ```bash
 python3 -m pip install -e '.[dev]'
 ```
+
+The project pins ANP Python SDK `anp==0.8.8`; the protocol adapter fails fast when another version is loaded. In this workspace, use `PYTHONPATH=../anp/anp:src` for verification if the active environment still has an older installed `anp` package.
 
 Run the full local suite:
 
@@ -36,7 +38,7 @@ Use Python 3.10+ with 4-space indentation, snake_case modules/functions, PascalC
 
 ## Testing Guidelines
 
-Use `pytest` and `pytest-asyncio`. Name files `test_*.py` and test functions `test_*`. Prefer focused ASGI tests with temporary data directories before broad system tests. Cover DID registration, DID documents, profile compatibility, direct messaging, group participant boundaries, attachments, and JSON-RPC compatibility routes when changing those areas. Public `rwiki.cn` tests must remain opt-in through `AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1`.
+Use `pytest` and `pytest-asyncio`. Name files `test_*.py` and test functions `test_*`. Prefer focused ASGI tests with temporary data directories before broad system tests. Run `tests/test_protocol_anp_sdk.py` for SDK/signature changes, `tests/test_route_config.py` for route/env changes, `tests/test_user_service_compat.py` plus identity/contact/profile/agent/site files for User Service compatibility, and `tests/test_messaging_surface.py`, `tests/test_direct_messages.py`, `tests/test_group_participant.py`, `tests/test_attachments.py`, or `tests/test_sync_read_state.py` for messaging changes. Public `rwiki.cn` tests must remain opt-in through `AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1`.
 
 ## Commit & Pull Request Guidelines
 

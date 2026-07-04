@@ -85,6 +85,58 @@ server {
         proxy_pass http://127.0.0.1:8766/did/relationships/rpc;
     }
 
+    location = /auth/sms-codes {
+        proxy_pass http://127.0.0.1:8766/auth/sms-codes;
+    }
+
+    location = /auth/sms {
+        proxy_pass http://127.0.0.1:8766/auth/sms;
+    }
+
+    location = /auth/email-send {
+        proxy_pass http://127.0.0.1:8766/auth/email-send;
+    }
+
+    location = /auth/email-status {
+        proxy_pass http://127.0.0.1:8766/auth/email-status;
+    }
+
+    location = /auth/phone-bind-send {
+        proxy_pass http://127.0.0.1:8766/auth/phone-bind-send;
+    }
+
+    location = /auth/phone-bind-verify {
+        proxy_pass http://127.0.0.1:8766/auth/phone-bind-verify;
+    }
+
+    location = /auth/token-refresh {
+        proxy_pass http://127.0.0.1:8766/auth/token-refresh;
+    }
+
+    location = /auth/token-verify {
+        proxy_pass http://127.0.0.1:8766/auth/token-verify;
+    }
+
+    location = /auth/verify {
+        proxy_pass http://127.0.0.1:8766/auth/verify;
+    }
+
+    location = /sessions/verify {
+        proxy_pass http://127.0.0.1:8766/sessions/verify;
+    }
+
+    location = /ws/tickets {
+        proxy_pass http://127.0.0.1:8766/ws/tickets;
+    }
+
+    location = /ws/tickets/verify {
+        proxy_pass http://127.0.0.1:8766/ws/tickets/verify;
+    }
+
+    location = /auth/ws-ticket/verify {
+        proxy_pass http://127.0.0.1:8766/auth/ws-ticket/verify;
+    }
+
     location = /im/ws {
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;

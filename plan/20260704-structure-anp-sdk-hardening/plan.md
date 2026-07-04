@@ -1,10 +1,10 @@
 # Plan：结构收敛与 ANP SDK 0.8.8 接入
 
-状态：executing  
+状态：done  
 DOC：`awiki-open-server/plan/20260704-structure-anp-sdk-hardening/`  
 Harness：`awiki-harness/`  
 创建时间：2026-07-04  
-恢复指针：Step 01-05 已完成并提交；下一步执行 Step 06 文档与最终验证
+恢复指针：全部步骤已完成；Step 06 提交后计划结束
 
 ## 1. 目标
 
@@ -117,7 +117,7 @@ Harness：`awiki-harness/`
 | 03 | done | agent-user-compat | B | main | d0102d0 | 2026-07-04 11:10:42 +0800 | 2026-07-04 11:24:23 +0800 | ada9e42 | 本地 review + 只读 explorer：`user_compat/core.py` handler maps 覆盖完整；新增 `user_compat/http.py` 修复 package import 阻塞；`routes.py` 只保留 HTTP 薄转发；`services.py` 删除重复 User Service compat 实现并 re-export `user_compat.core` 身份表面；未引入生产短信/邮件、Aliyun、Redis/MySQL 或外部 User Service 调用；public `/anp-im/rpc` 白名单未变。 | `PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_user_service_compat.py tests/test_identity_pages.py -q` 19 passed；compileall pass；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 64 passed, 2 skipped；smoke-asgi ok=true；cross-domain local smoke ok=true。 | committed | pass_with_explicit_sdk_path | 进入 Step 04 |
 | 04 | done | agent-messaging | C | main | 0a51905 | 2026-07-04 11:28:14 +0800 | 2026-07-04 11:46:44 +0800 | 1b5ab25 | 本地 review + 只读 explorer：`services.py` 瘦身为兼容 facade；新增 `messaging/core.py`、`attachments/core.py`、`shared/runtime.py`；`routes.py` public allowlist 仍只暴露 `anp.get_capabilities`、`direct.send`、`group.get_info`、`group.join`、`attachment.get_download_ticket`；测试 monkeypatch 已跟随新模块边界；未引入 federation/E2EE/群管理/外部服务代理。 | compileall pass；`PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_messaging_objects.py tests/test_route_config.py -q` 28 passed；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 64 passed, 2 skipped；smoke-asgi ok=true；cross-domain local smoke ok=true；production code forbidden dependency/domain scan pass。 | committed | pass_with_explicit_sdk_path | 进入 Step 05/06 |
 | 05 | done | agent-tests | D | main | 436be5d | 2026-07-04 11:48:30 +0800 | 2026-07-04 11:54:17 +0800 | b1cff01 | 本地 review：旧 `test_identity_pages.py` 和 `test_messaging_objects.py` 已按域拆分；`tests/helpers.py` 只包含本地测试构造 helper；`tests/test_rwiki_cn_system.py` 仍默认 skip 并改用 helper 导入；未修改源码行为。 | compileall pass；`PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_messaging_surface.py tests/test_direct_messages.py tests/test_group_participant.py tests/test_attachments.py tests/test_sync_read_state.py tests/test_identity_documents.py tests/test_contact_auth_compat.py tests/test_profile_compat.py tests/test_agent_compat.py tests/test_site_relationships.py -q` 39 passed；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 64 passed, 2 skipped。 | committed | pass_with_explicit_sdk_path | 进入 Step 06 |
-| 06 | pending | agent-docs | D | TBD | TBD | TBD | TBD | TBD | TBD | TBD | not_started | pending | 等 Step 04 |
+| 06 | done | agent-docs | D | main | 96e4dbf | 2026-07-04 11:55:54 +0800 | 2026-07-04 11:59:52 +0800 | TBD | 本地 review + 只读 explorer：README/AGENTS/deploy 已同步 ANP SDK 0.8.8、模块结构、测试拆分、rwiki.cn 部署边界、contact verification 禁用和公网 nginx route；扫描确认生产代码未新增 `awiki.info` 代理、Aliyun、Redis/MySQL 或相邻服务依赖。 | compileall pass；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 64 passed, 2 skipped；ASGI smoke ok=true；cross-domain local smoke ok=true；Rust CLI local smoke ok=true；`verify-public https://rwiki.cn` ok=true；public system tests 2 passed；diff check pass。 | ready_to_commit | pass_with_explicit_sdk_path | 提交后计划结束 |
 
 ## 9. Codex Goal 执行协议
 
@@ -258,8 +258,8 @@ Harness：`awiki-harness/`
 - Review 范围：源码结构、SDK adapter、User Service compat、本域/公开路由、storage helper、测试拆分、README/AGENTS/deploy、Plan 台账。
 - 重点关注：跨步骤一致性、ANP SDK 0.8.8 集中使用、无相邻仓库修改、无手机/邮箱/Aliyun 依赖、public `/anp-im/rpc` 白名单未扩大、`rwiki.cn` endpoint 正确。
 - 整体验证命令 / 检查：见第 12 节。
-- Review 发现：待执行后填写。
-- 已修复问题：待执行后填写。
-- 剩余风险：待执行后填写。
-- 最终证据：待执行后填写。
-- 最终 `git status`：待执行后填写。
+- Review 发现：README/AGENTS/deploy 与 Step 01-05 后的实际模块结构和测试拆分存在文档漂移；nginx 示例未列 root-level auth/ws ticket 兼容 route；历史 plan 文档仍保留旧测试文件名作为当时执行证据。
+- 已修复问题：README 补 Code Structure、ANP SDK 0.8.8、focused test map 和缺失 API routes；AGENTS 补模块边界和 focused test guidance；deploy README 补 venv/install、contact verification 禁用和 no-proxy checklist；nginx 示例补 root-level auth/ws ticket proxy route；本次主 Plan 和 Step 06 已回填证据。
+- 剩余风险：当前机器默认安装 `anp==0.6.8`，标准 `PYTHONPATH=src` 会被 adapter 版本断言阻断；所有最终 gate 使用 `PYTHONPATH=../anp/anp:src` 指向 0.8.8 sibling SDK。生产部署需按 README/deploy 通过 `pip install -e .` 安装 `anp==0.8.8`。
+- 最终证据：`PYTHONPATH=../anp/anp:src python3 -m compileall -q src scripts tests` pass；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 64 passed, 2 skipped；`smoke-asgi` ok=true；`smoke-cross-domain-local` ok=true；`smoke-rust-cli-local --awiki-cli-bin ../awiki-cli-rs2/target/debug/awiki-cli` ok=true；`verify-public --base-url https://rwiki.cn --did-domain rwiki.cn` ok=true；`AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1 ... tests/test_rwiki_cn_system.py -q` 2 passed；`git diff --check` pass；forbidden dependency/domain scan pass.
+- 最终 `git status`：Step 06 提交前仅 README/AGENTS/deploy/plan 文档改动；提交后需再次确认 clean。

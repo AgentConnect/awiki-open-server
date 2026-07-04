@@ -2,30 +2,30 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：06  
-状态：draft
+状态：done
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | pending |
-| Branch | TBD |
-| Started | TBD |
-| Completed | TBD |
+| Status | done |
+| Branch | main |
+| Started | 2026-07-04 11:55:54 +0800 |
+| Completed | 2026-07-04 11:59:52 +0800 |
 | Commit | TBD |
-| Review evidence | TBD |
-| Verification evidence | TBD |
-| Next action | 同步文档并执行最终 L3 gate |
+| Review evidence | 本地 review + 只读 explorer：README/AGENTS/deploy 已同步 ANP SDK 0.8.8、模块结构、测试拆分、rwiki.cn 部署边界、contact verification 禁用和公网 nginx route；扫描确认生产代码未新增 `awiki.info` 代理、Aliyun、Redis/MySQL 或相邻服务依赖。 |
+| Verification evidence | `PYTHONPATH=../anp/anp:src python3 -m compileall -q src scripts tests` pass；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 64 passed, 2 skipped；ASGI smoke ok=true；cross-domain local smoke ok=true；Rust CLI local smoke ok=true；`verify-public https://rwiki.cn` ok=true；`AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1 ... tests/test_rwiki_cn_system.py -q` 2 passed；diff check pass。 |
+| Next action | 提交 Step 06 后结束计划 |
 | Assigned agent | agent-docs |
 | Parallel group | D |
 | Parallel safe | yes |
 | Parallel with | Step 05 |
 | Conflict resources | `awiki-open-server/README.md`, `awiki-open-server/AGENTS.md`, `awiki-open-server/deploy/*`, Plan docs |
-| Baseline commit | TBD |
-| Worktree / branch | TBD |
+| Baseline commit | 96e4dbf |
+| Worktree / branch | main |
 | Merge gate | Final L3 gate |
 | Verification gate | docs + full local + Rust CLI + rwiki.cn public |
-| Gate status | pending |
+| Gate status | pass_with_explicit_sdk_path |
 
 ## 2. 目标
 
@@ -70,11 +70,11 @@ Step index：06
 
 ## 7. 验收标准
 
-- [ ] README/AGENTS/deploy 与实际结构、配置和命令一致。
-- [ ] 文档明确 ANP SDK `anp==0.8.8`。
-- [ ] 文档明确 User Service compat 本地实现，不代理、不调用相邻服务。
-- [ ] Final L3 验证命令有结果或明确 skip/blocker。
-- [ ] `git status --short --branch` 干净。
+- [x] README/AGENTS/deploy 与实际结构、配置和命令一致。
+- [x] 文档明确 ANP SDK `anp==0.8.8`。
+- [x] 文档明确 User Service compat 本地实现，不代理、不调用相邻服务。
+- [x] Final L3 验证命令有结果或明确 skip/blocker。
+- [x] `git status --short --branch` 干净。
 
 ## 8. 验证方式
 
@@ -95,12 +95,12 @@ Step index：06
 
 | Review 项 | 结果 | 备注 |
 |---|---|---|
-| 发现问题 | TBD | TBD |
-| 已修复问题 | TBD | TBD |
-| 剩余风险 | TBD | TBD |
-| 新增或缺失测试 | TBD | TBD |
-| 已更新或缺失文档 | TBD | TBD |
-| 并行安全是否仍成立 | TBD | 与 Step 05 合并后确认 |
+| 发现问题 | README/AGENTS 未描述当前模块拆分；deploy README 缺少 venv/install 和 contact verification 禁用说明；nginx 示例未列 root-level auth/ws ticket 兼容路由 | 只读 explorer + 本地 review |
+| 已修复问题 | 补 README Code Structure、SDK 0.8.8、focused test map 和 API route；更新 AGENTS 结构/测试指南；更新 deploy checklist；补 nginx route proxy | 不改源码行为 |
+| 剩余风险 | 本机默认安装的 `anp==0.6.8` 仍会阻断标准 `PYTHONPATH=src`，本次验证使用 sibling `../anp/anp` 0.8.8 源码路径；生产安装需 `pip install -e .` 拉取 `anp==0.8.8` | 已在 README/AGENTS 说明 |
+| 新增或缺失测试 | 未新增测试；执行最终 full/local/Rust/public gates | 全部通过 |
+| 已更新或缺失文档 | README、AGENTS、deploy README、nginx 示例和 Plan 台账已更新 | harness 文档未改，因只修改本仓 |
+| 并行安全是否仍成立 | 是 | Step 05 已完成提交 |
 
 ## 10. Commit 要求
 

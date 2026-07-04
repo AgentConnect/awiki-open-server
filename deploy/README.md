@@ -25,6 +25,8 @@ That command verifies:
 - `/healthz` responds with `status=ok`.
 - `/anp-im/rpc` responds to `anp.get_capabilities`.
 - `federation` is declared disabled.
+- Contact-verification compatibility remains disabled; no phone/email provider
+  or Aliyun integration is configured.
 
 ## Files
 
@@ -35,15 +37,27 @@ That command verifies:
 ## Deployment Checklist
 
 1. Install the repository under a release path such as `/opt/awiki-open-server`.
-2. Create a private env file from `deploy/awiki-open-server.env.example`.
-3. Generate and protect an Ed25519 service private key outside the repository.
-4. Start the app on `127.0.0.1:8766`.
-5. Configure nginx with routes from `deploy/nginx-rwiki.cn.conf.example`.
-6. Run `nginx -t` and reload nginx.
-7. Run `verify-public`.
-8. Configure one Rust CLI workspace for `https://rwiki.cn` and another for `https://awiki.info`.
-9. Register a test user on each side and verify direct send, inbox, and history in both directions.
+2. Create a Python virtual environment, then install the app so pinned
+   dependencies, including `anp==0.8.8`, are installed:
 
-If step 9 fails after `verify-public` passes, record the request direction, sender DID,
+   ```bash
+   cd /opt/awiki-open-server
+   python3 -m venv .venv
+   .venv/bin/python -m pip install -e .
+   ```
+
+3. Create a private env file from `deploy/awiki-open-server.env.example`.
+4. Generate and protect an Ed25519 service private key outside the repository.
+5. Keep `AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT=false` for public service.
+6. Start the app on `127.0.0.1:8766`.
+7. Configure nginx with routes from `deploy/nginx-rwiki.cn.conf.example`.
+8. Confirm every `proxy_pass` targets `127.0.0.1:8766`; `awiki.info` is only a
+   remote interoperability peer, not a backend.
+9. Run `nginx -t` and reload nginx.
+10. Run `verify-public`.
+11. Configure one Rust CLI workspace for `https://rwiki.cn` and another for `https://awiki.info`.
+12. Register a test user on each side and verify direct send, inbox, and history in both directions.
+
+If step 12 fails after `verify-public` passes, record the request direction, sender DID,
 recipient DID, target URL, RPC error body, and service logs before changing any sibling
 service.

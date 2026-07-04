@@ -6,6 +6,21 @@ This server implements those capabilities itself. It is not a proxy to `awiki.in
 
 The Community edition deliberately does not implement group creation or management, Direct/Group E2EE, federation peer routes, relay, remote projection, billing, production identity providers, email or phone verification flows, Aliyun integrations, or multi-tenant hosting.
 
+## Code Structure
+
+Application code lives under `src/awiki_open_server/`. `protocol/anp_adapter.py`
+is the only ANP Python SDK adapter and requires `anp==0.8.8` at runtime;
+`service_identity.py` uses it for HTTP Signatures, Content-Digest, and origin
+proof checks. `app/` owns FastAPI settings, route mounting, and realtime wiring.
+`messaging/` owns direct messaging, group participant methods, local sync, and
+read-state handlers. `attachments/` owns local upload slots, committed objects,
+and download tickets. `user_compat/` implements the local User Service
+compatibility surface. `shared/runtime.py` contains cross-cutting DID discovery,
+HTTP JSON, signature, object URL, and realtime helpers. `services.py` is now a
+compatibility facade plus the remaining content/site/DID relationship handlers;
+new domain logic should go into the domain package rather than back into
+`services.py`.
+
 ## Run Locally
 
 Install dependencies in your preferred Python environment:
@@ -13,6 +28,12 @@ Install dependencies in your preferred Python environment:
 ```bash
 python3 -m pip install -e '.[dev]'
 ```
+
+The dependency set pins ANP Python SDK `anp==0.8.8`; importing
+`awiki_open_server.protocol.anp_adapter` fails fast if another SDK version is
+loaded. In this workspace, local verification can use the sibling SDK checkout
+with `PYTHONPATH=../anp/anp:src` when the active environment still has an older
+installed `anp` package.
 
 Start the server:
 
@@ -73,6 +94,14 @@ Run the test suite:
 ```bash
 PYTHONPATH=src python3 -m pytest tests -q
 ```
+
+Focused suites:
+
+- ANP SDK/signature adapter: `tests/test_protocol_anp_sdk.py`
+- Route and env path config: `tests/test_route_config.py`
+- User Service compatibility: `tests/test_user_service_compat.py`, `tests/test_identity_documents.py`, `tests/test_contact_auth_compat.py`, `tests/test_profile_compat.py`, `tests/test_agent_compat.py`, `tests/test_site_relationships.py`
+- Messaging surface: `tests/test_messaging_surface.py`, `tests/test_direct_messages.py`, `tests/test_group_participant.py`, `tests/test_attachments.py`, `tests/test_sync_read_state.py`
+- Public deployment gate: `tests/test_rwiki_cn_system.py`, skipped unless `AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1`
 
 Run an in-process CLI smoke without starting Uvicorn:
 
@@ -259,10 +288,16 @@ testing:
 - `POST /user-service/auth/sms-codes`
 - `POST /auth/sms`
 - `POST /user-service/auth/sms`
+- `POST /auth/email-send`
+- `POST /user-service/auth/email-send`
+- `GET /auth/email-status`
+- `GET /user-service/auth/email-status`
 - `POST /auth/phone-bind-send`
 - `POST /user-service/auth/phone-bind-send`
 - `POST /auth/phone-bind-verify`
 - `POST /user-service/auth/phone-bind-verify`
+- `POST /auth/token-refresh`
+- `POST /user-service/auth/token-refresh`
 - `GET /auth/token-verify`
 - `GET /user-service/auth/token-verify`
 - `GET /auth/verify`
@@ -276,6 +311,7 @@ testing:
 - `GET /auth/ws-ticket/verify`
 - `GET /user-service/auth/ws-ticket/verify`
 - `POST /content/rpc`
+- `POST /user-service/content/rpc`
 - `GET /content/{slug}.md`
 - `POST /site/rpc`
 - `GET /`
