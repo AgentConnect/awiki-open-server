@@ -4,53 +4,52 @@ import json
 from pathlib import Path
 import asyncio
 from contextlib import suppress
-import re
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import PlainTextResponse, Response
 
 from awiki_open_server.services import (
-    AGENT_INVENTORY_HANDLERS,
-    AGENT_REGISTRATION_HANDLERS,
     CONTENT_HANDLERS,
     DID_RELATIONSHIP_HANDLERS,
-    DID_VERIFY_HANDLERS,
-    HANDLE_HANDLERS,
-    IDENTITY_HANDLERS,
-    ME_HANDLERS,
     MESSAGE_HANDLERS,
-    MESSAGE_AGENT_HANDLERS,
-    PROFILE_HANDLERS,
     SITE_HANDLERS,
-    USERS_HANDLERS,
     attachment_ticket,
     content_get,
     did_for_token,
     get_store,
-    handle_confirmation_document,
-    handle_resolution_document,
-    legacy_me_profile,
-    legacy_public_profile,
-    legacy_update_me,
-    profile_markdown,
-    register,
     site_public_page,
     site_public_root,
     upload_slot,
 )
 from awiki_open_server.shared.errors import AwikiError, InvalidParams, NotFound, Unauthorized
 from awiki_open_server.shared.jsonrpc import dispatch
-
-
-def _identity_headers(did: str) -> dict[str, str]:
-    return {"X-User-Id": did, "X-DID": did}
-
-
-def _contact_handle(payload: dict, default: str = "user") -> str:
-    raw = str(payload.get("handle") or payload.get("phone") or payload.get("email") or default)
-    raw = raw.split("@", 1)[0]
-    local = re.sub(r"[^a-z0-9-]+", "-", raw.lower()).strip("-")
-    return local or default
+from awiki_open_server.user_compat import (
+    AGENT_INVENTORY_HANDLERS,
+    AGENT_REGISTRATION_HANDLERS,
+    DID_VERIFY_HANDLERS,
+    HANDLE_HANDLERS,
+    IDENTITY_HANDLERS,
+    ME_HANDLERS,
+    MESSAGE_AGENT_HANDLERS,
+    PROFILE_HANDLERS,
+    USERS_HANDLERS,
+    email_send as user_compat_email_send,
+    email_status as user_compat_email_status,
+    handle_confirmation_document,
+    handle_resolution_document,
+    legacy_me_profile,
+    legacy_public_profile,
+    legacy_update_me,
+    phone_bind_send as user_compat_phone_bind_send,
+    phone_bind_verify as user_compat_phone_bind_verify,
+    profile_markdown,
+    sms_codes as user_compat_sms_codes,
+    sms_login as user_compat_sms_login,
+    token_refresh as user_compat_token_refresh,
+    token_verify as user_compat_token_verify,
+    ws_ticket_verify as user_compat_ws_ticket_verify,
+    ws_tickets as user_compat_ws_tickets,
+)
 
 
 def _http_error(exc: Exception) -> HTTPException:
@@ -63,19 +62,6 @@ def _http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, AwikiError):
         return HTTPException(status_code=400, detail=exc.error_message)
     return HTTPException(status_code=500, detail=str(exc))
-
-
-def _contact_verification_settings(request: Request):
-    settings = request.app.state.settings
-    if not settings.enable_contact_verification_compat:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "contact_verification_not_enabled",
-                "reason": "email_or_phone_verification_is_not_part_of_open_server_mvp",
-            },
-        )
-    return settings
 
 
 PUBLIC_ANP_METHODS = [
@@ -214,116 +200,37 @@ def mount_routes(app: FastAPI) -> None:
     @app.post("/auth/sms-codes")
     @app.post("/user-service/auth/sms-codes")
     async def sms_codes(request: Request):
-        settings = _contact_verification_settings(request)
-        payload = await request.json()
-        phone = payload.get("phone")
-        return {"ok": True, "sent": True, "phone": phone, "provider": "dev", "dev_otp": settings.contact_verification_dev_otp}
+        return await user_compat_sms_codes(request)
 
     @app.post("/auth/sms")
     @app.post("/user-service/auth/sms")
     async def sms_login(request: Request):
-        settings = _contact_verification_settings(request)
-        payload = await request.json()
-        token = payload.get("token") or payload.get("access_token")
-        did = did_for_token(request, str(token)) if token else None
-        if not did:
-            otp = str(payload.get("otp") or payload.get("otp_code") or payload.get("code") or "")
-            if otp != settings.contact_verification_dev_otp:
-                raise HTTPException(status_code=401, detail="invalid_otp")
-            handle = _contact_handle(payload, "dev-user")
-            settings = request.app.state.settings
-            stored_handle = f"{handle}@{settings.did_domain}"
-            with get_store(request).connect() as conn:
-                revoked_row = conn.execute("SELECT revoked_at FROM users WHERE handle = ?", (stored_handle,)).fetchone()
-                row = conn.execute(
-                    """
-                    SELECT u.did, u.token
-                    FROM users u
-                    LEFT JOIN did_documents d ON d.did = u.did
-                    WHERE u.handle = ?
-                      AND u.revoked_at IS NULL
-                      AND COALESCE(d.status, 'active') = 'active'
-                      AND d.revoked_at IS NULL
-                    """,
-                    (stored_handle,),
-                ).fetchone()
-            if row:
-                did = str(row["did"])
-                token = str(row["token"])
-            elif revoked_row:
-                raise HTTPException(status_code=401, detail="did_revoked")
-            else:
-                registered = register(
-                    {
-                        "handle": handle,
-                        "display_name": payload.get("display_name") or handle,
-                    },
-                    request,
-                )
-                did = registered["did"]
-                token = registered["token"]
-        return {
-            "ok": True,
-            "access_token": token,
-            "token": token,
-            "refresh_token": token,
-            "did": did,
-            "user_id": did,
-            "provider": "dev",
-        }
+        return await user_compat_sms_login(request)
 
     @app.post("/auth/email-send")
     @app.post("/user-service/auth/email-send")
     async def email_send(request: Request):
-        _contact_verification_settings(request)
-        payload = await request.json()
-        return {"ok": True, "sent": True, "email": payload.get("email"), "provider": "dev"}
+        return await user_compat_email_send(request)
 
     @app.get("/auth/email-status")
     @app.get("/user-service/auth/email-status")
     async def email_status(request: Request):
-        _contact_verification_settings(request)
-        return {"ok": True, "verified": True, "provider": "dev", "mock": True, "production_verified": False}
+        return await user_compat_email_status(request)
 
     @app.post("/auth/phone-bind-send")
     @app.post("/user-service/auth/phone-bind-send")
     async def phone_bind_send(request: Request):
-        settings = _contact_verification_settings(request)
-        auth = request.headers.get("authorization") or request.headers.get("Authorization")
-        if not auth or not auth.lower().startswith("bearer "):
-            raise HTTPException(status_code=401, detail="missing_bearer_token")
-        did = did_for_token(request, auth.split(" ", 1)[1])
-        if not did:
-            raise HTTPException(status_code=401, detail="invalid_token")
-        payload = await request.json()
-        phone = payload.get("phone")
-        return {"ok": True, "sent": True, "message": "Code sent.", "phone": phone, "provider": "dev", "dev_otp": settings.contact_verification_dev_otp}
+        return await user_compat_phone_bind_send(request)
 
     @app.post("/auth/phone-bind-verify")
     @app.post("/user-service/auth/phone-bind-verify")
     async def phone_bind_verify(request: Request):
-        settings = _contact_verification_settings(request)
-        auth = request.headers.get("authorization") or request.headers.get("Authorization")
-        if not auth or not auth.lower().startswith("bearer "):
-            raise HTTPException(status_code=401, detail="missing_bearer_token")
-        did = did_for_token(request, auth.split(" ", 1)[1])
-        if not did:
-            raise HTTPException(status_code=401, detail="invalid_token")
-        payload = await request.json()
-        code = str(payload.get("code") or payload.get("otp") or payload.get("otp_code") or "")
-        if code != settings.contact_verification_dev_otp:
-            raise HTTPException(status_code=401, detail="invalid_otp")
-        return {"success": True, "ok": True, "phone": payload.get("phone"), "did": did, "user_id": did, "provider": "dev"}
+        return await user_compat_phone_bind_verify(request)
 
     @app.post("/auth/token-refresh")
     @app.post("/user-service/auth/token-refresh")
     async def token_refresh(request: Request):
-        payload = await request.json()
-        token = payload.get("refresh_token") or payload.get("token") or payload.get("access_token")
-        did = did_for_token(request, str(token)) if token else None
-        if not did:
-            raise HTTPException(status_code=401, detail="invalid_token")
-        return {"ok": True, "access_token": token, "token": token, "refresh_token": token, "did": did}
+        return await user_compat_token_refresh(request)
 
     @app.get("/auth/token-verify")
     @app.get("/user-service/auth/token-verify")
@@ -332,37 +239,19 @@ def mount_routes(app: FastAPI) -> None:
     @app.get("/sessions/verify")
     @app.get("/user-service/sessions/verify")
     async def token_verify(request: Request, token: str | None = None):
-        bearer = token
-        auth = request.headers.get("authorization") or request.headers.get("Authorization")
-        if auth and auth.lower().startswith("bearer "):
-            bearer = auth.split(" ", 1)[1]
-        did = did_for_token(request, str(bearer)) if bearer else None
-        if not did:
-            raise HTTPException(status_code=401, detail="invalid_token")
-        return JSONResponse({"ok": True, "active": True, "did": did, "user_id": did}, headers=_identity_headers(did))
+        return await user_compat_token_verify(request, token=token)
 
     @app.post("/ws/tickets")
     @app.post("/user-service/ws/tickets")
     async def ws_tickets(request: Request):
-        auth = request.headers.get("authorization") or request.headers.get("Authorization")
-        if not auth or not auth.lower().startswith("bearer "):
-            raise HTTPException(status_code=401, detail="missing_bearer_token")
-        token = auth.split(" ", 1)[1]
-        did = did_for_token(request, token)
-        if not did:
-            raise HTTPException(status_code=401, detail="invalid_token")
-        return {"ticket": token, "token": token, "expires_in": 3600, "did": did}
+        return await user_compat_ws_tickets(request)
 
     @app.get("/ws/tickets/verify")
     @app.get("/user-service/ws/tickets/verify")
     @app.get("/auth/ws-ticket/verify")
     @app.get("/user-service/auth/ws-ticket/verify")
     async def ws_ticket_verify(request: Request, ticket: str | None = None, token: str | None = None):
-        raw = ticket or token or request.headers.get("X-WS-Ticket") or request.headers.get("x-ws-ticket")
-        did = did_for_token(request, str(raw)) if raw else None
-        if not did:
-            raise HTTPException(status_code=401, detail="invalid_ticket")
-        return JSONResponse({"ok": True, "active": True, "did": did, "user_id": did}, headers=_identity_headers(did))
+        return await user_compat_ws_ticket_verify(request, ticket=ticket, token=token)
 
     async def im_ws(websocket: WebSocket):
         token = websocket.query_params.get("token") or websocket.query_params.get("ticket")

@@ -2,30 +2,30 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：03  
-状态：draft
+状态：done
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | pending |
-| Branch | TBD |
-| Started | TBD |
-| Completed | TBD |
-| Commit | TBD |
-| Review evidence | TBD |
-| Verification evidence | TBD |
-| Next action | 拆出本仓 User Service compat 模块 |
+| Status | done |
+| Branch | main |
+| Started | 2026-07-04 11:10:42 +0800 |
+| Completed | 2026-07-04 11:24:23 +0800 |
+| Commit | 本步骤提交后回填 |
+| Review evidence | 本地 review + 只读 explorer：`user_compat/core.py` handler maps 覆盖完整；新增 `user_compat/http.py` 修复 package import 阻塞；`routes.py` 只保留 HTTP 薄转发；未引入生产短信/邮件、Aliyun、Redis/MySQL 或外部 User Service 调用；public `/anp-im/rpc` 白名单未变。 |
+| Verification evidence | `PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_user_service_compat.py tests/test_identity_pages.py -q` 19 passed；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 64 passed, 2 skipped；`PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-asgi --data-dir /tmp/awiki-open-server-step03-asgi` ok=true；`PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-cross-domain-local --data-root /tmp/awiki-open-server-step03-cross --clean` ok=true。 |
+| Next action | 创建 Step 03 聚焦提交，然后进入 Step 04 |
 | Assigned agent | agent-user-compat |
 | Parallel group | B |
 | Parallel safe | yes |
 | Parallel with | Step 02 |
 | Conflict resources | `awiki-open-server/src/awiki_open_server/services.py` identity/profile/handle/users/auth compat 区域 |
-| Baseline commit | TBD |
-| Worktree / branch | TBD |
+| Baseline commit | d0102d0 |
+| Worktree / branch | main |
 | Merge gate | User compat gate |
 | Verification gate | focused compat tests |
-| Gate status | pending |
+| Gate status | pass_with_explicit_sdk_path |
 
 ## 2. 目标
 
@@ -71,11 +71,11 @@ Step index：03
 
 ## 7. 验收标准
 
-- [ ] User Service compat 逻辑不再主要堆在 `routes.py` 内。
-- [ ] `services.py` identity/profile/handle/users 区域明显瘦身。
-- [ ] 没有引入短信/邮件/Aliyun/Redis/MySQL 依赖。
-- [ ] contact verification 默认 disabled。
-- [ ] Focused compat tests pass。
+- [x] User Service compat 逻辑不再主要堆在 `routes.py` 内。
+- [x] `services.py` identity/profile/handle/users 区域明显瘦身。
+- [x] 没有引入短信/邮件/Aliyun/Redis/MySQL 依赖。
+- [x] contact verification 默认 disabled。
+- [x] Focused compat tests pass。
 - [ ] 本步骤在进入 Step 04 前已创建聚焦 commit。
 
 ## 8. 验证方式
@@ -92,11 +92,11 @@ Step index：03
 
 | Review 项 | 结果 | 备注 |
 |---|---|---|
-| 发现问题 | TBD | TBD |
-| 已修复问题 | TBD | TBD |
-| 剩余风险 | TBD | TBD |
-| 新增或缺失测试 | TBD | TBD |
-| 并行安全是否仍成立 | TBD | 与 Step 02 route path 无冲突 |
+| 发现问题 | `user_compat/__init__.py` 已导入 `.http` 但文件缺失，导致 package import 失败；`routes.py` 内仍包含 auth/contact/ws-ticket 业务逻辑；`services.py` 存在双份 User Service compat 实现。 | 由只读 explorer 和本地 import 检查确认 |
+| 已修复问题 | 新增 `user_compat/http.py`；`routes.py` 改成薄转发；`services.py` 删除重复 DID/Profile/Handle/Users/Agent compat 实现并 re-export `user_compat.core` 身份表面。 | `services.py` 从 3623 行降到 2312 行 |
+| 剩余风险 | `services.py` 仍包含 messaging/attachment/site/content，Step 04 继续拆分；本机标准 `PYTHONPATH=src` 仍受已安装 `anp==0.6.8` 影响。 | 使用 `PYTHONPATH=../anp/anp:src` 验证 0.8.8 |
+| 新增或缺失测试 | 新增 `tests/test_user_service_compat.py`；focused、全量、ASGI smoke、cross-domain local smoke 均通过。 | 无新增缺失测试 |
+| 并行安全是否仍成立 | 是 | Step 02 已提交，本步骤未改 Step 02 路径契约 |
 
 ## 10. Commit 要求
 
