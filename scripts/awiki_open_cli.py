@@ -248,9 +248,13 @@ def start_open_server(
     resolver_map: dict[str, str],
 ) -> subprocess.Popen:
     env = os.environ.copy()
+    repo_root = Path(__file__).resolve().parents[1]
+    python_path_entries = [str(repo_root / "src")]
+    if env.get("PYTHONPATH"):
+        python_path_entries.append(env["PYTHONPATH"])
     env.update(
         {
-            "PYTHONPATH": "src",
+            "PYTHONPATH": os.pathsep.join(python_path_entries),
             "AWIKI_DATA_DIR": str(data_dir),
             "AWIKI_PUBLIC_BASE_URL": f"http://127.0.0.1:{port}",
             "AWIKI_DID_DOMAIN": domain,
@@ -274,7 +278,7 @@ def start_open_server(
             "--log-level",
             "warning",
         ],
-        cwd=Path(__file__).resolve().parents[1],
+        cwd=repo_root,
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
