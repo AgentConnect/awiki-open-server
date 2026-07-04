@@ -12,10 +12,10 @@ Step index：03
 | Branch | main |
 | Started | 2026-07-04 11:10:42 +0800 |
 | Completed | 2026-07-04 11:24:23 +0800 |
-| Commit | 本步骤提交后回填 |
+| Commit | ada9e42 |
 | Review evidence | 本地 review + 只读 explorer：`user_compat/core.py` handler maps 覆盖完整；新增 `user_compat/http.py` 修复 package import 阻塞；`routes.py` 只保留 HTTP 薄转发；未引入生产短信/邮件、Aliyun、Redis/MySQL 或外部 User Service 调用；public `/anp-im/rpc` 白名单未变。 |
 | Verification evidence | `PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_user_service_compat.py tests/test_identity_pages.py -q` 19 passed；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 64 passed, 2 skipped；`PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-asgi --data-dir /tmp/awiki-open-server-step03-asgi` ok=true；`PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-cross-domain-local --data-root /tmp/awiki-open-server-step03-cross --clean` ok=true。 |
-| Next action | 创建 Step 03 聚焦提交，然后进入 Step 04 |
+| Next action | 进入 Step 04 |
 | Assigned agent | agent-user-compat |
 | Parallel group | B |
 | Parallel safe | yes |
@@ -76,7 +76,7 @@ Step index：03
 - [x] 没有引入短信/邮件/Aliyun/Redis/MySQL 依赖。
 - [x] contact verification 默认 disabled。
 - [x] Focused compat tests pass。
-- [ ] 本步骤在进入 Step 04 前已创建聚焦 commit。
+- [x] 本步骤在进入 Step 04 前已创建聚焦 commit。
 
 ## 8. 验证方式
 

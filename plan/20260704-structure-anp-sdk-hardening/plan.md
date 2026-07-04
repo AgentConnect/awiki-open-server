@@ -4,7 +4,7 @@
 DOC：`awiki-open-server/plan/20260704-structure-anp-sdk-hardening/`  
 Harness：`awiki-harness/`  
 创建时间：2026-07-04  
-恢复指针：Step 01/02/03 已完成；等待 Step 03 聚焦提交后进入 Step 04
+恢复指针：Step 01/02/03 已完成并提交；下一步执行 Step 04
 
 ## 1. 目标
 
@@ -114,7 +114,7 @@ Harness：`awiki-harness/`
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 01 | done | agent-protocol | A | main | 2b7c467 | 2026-07-04 10:26:58 +0800 | 2026-07-04 10:42:05 +0800 | 6d8c1cf | 本地 review + 并行 reviewer 通过：SDK import 集中在 adapter；未扩大 `/anp-im/rpc` 白名单；未引入手机/邮箱/Aliyun/E2EE/federation/group management；删除旧手写 HTTP Signature / origin proof helper；已补 HTTP signature SDK 异常映射和负例测试。 | `PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 56 passed, 2 skipped；compileall pass；cross-domain local smoke ok=true。标准 `PYTHONPATH=src` 被本机 `anp 0.6.8` 阻断，安装 0.8.8 受 PyPI SSL / hatchling 限制。 | committed | pass_with_explicit_sdk_path | 进入 Step 02/03 Wave B |
 | 02 | done | agent-routing | B | main | ec6b8d6 | 2026-07-04 10:49:36 +0800 | 2026-07-04 10:53:13 +0800 | db7f6e8 | 本地 review 通过：Settings 路径驱动 route 注册；public 白名单未扩大；README/env 示例同步。 | `PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_route_config.py -q` 4 passed；smoke-asgi ok=true；全量 tests 60 passed, 2 skipped；cross-domain smoke ok=true。 | committed | pass_with_explicit_sdk_path | 等待 Step 03 |
-| 03 | done | agent-user-compat | B | main | d0102d0 | 2026-07-04 11:10:42 +0800 | 2026-07-04 11:24:23 +0800 | 本步骤提交后回填 | 本地 review + 只读 explorer：`user_compat/core.py` handler maps 覆盖完整；新增 `user_compat/http.py` 修复 package import 阻塞；`routes.py` 只保留 HTTP 薄转发；`services.py` 删除重复 User Service compat 实现并 re-export `user_compat.core` 身份表面；未引入生产短信/邮件、Aliyun、Redis/MySQL 或外部 User Service 调用；public `/anp-im/rpc` 白名单未变。 | `PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_user_service_compat.py tests/test_identity_pages.py -q` 19 passed；compileall pass；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 64 passed, 2 skipped；smoke-asgi ok=true；cross-domain local smoke ok=true。 | ready_to_commit | pass_with_explicit_sdk_path | 创建 Step 03 聚焦提交后进入 Step 04 |
+| 03 | done | agent-user-compat | B | main | d0102d0 | 2026-07-04 11:10:42 +0800 | 2026-07-04 11:24:23 +0800 | ada9e42 | 本地 review + 只读 explorer：`user_compat/core.py` handler maps 覆盖完整；新增 `user_compat/http.py` 修复 package import 阻塞；`routes.py` 只保留 HTTP 薄转发；`services.py` 删除重复 User Service compat 实现并 re-export `user_compat.core` 身份表面；未引入生产短信/邮件、Aliyun、Redis/MySQL 或外部 User Service 调用；public `/anp-im/rpc` 白名单未变。 | `PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_user_service_compat.py tests/test_identity_pages.py -q` 19 passed；compileall pass；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 64 passed, 2 skipped；smoke-asgi ok=true；cross-domain local smoke ok=true。 | committed | pass_with_explicit_sdk_path | 进入 Step 04 |
 | 04 | pending | agent-messaging | C | TBD | TBD | TBD | TBD | TBD | TBD | TBD | not_started | pending | 等 Wave B |
 | 05 | pending | agent-tests | D | TBD | TBD | TBD | TBD | TBD | TBD | TBD | not_started | pending | 等 Step 04 |
 | 06 | pending | agent-docs | D | TBD | TBD | TBD | TBD | TBD | TBD | TBD | not_started | pending | 等 Step 04 |
