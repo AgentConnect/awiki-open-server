@@ -12,7 +12,7 @@ Step index：05
 | Branch | main |
 | Started | 2026-07-04 11:48:30 +0800 |
 | Completed | 2026-07-04 11:54:17 +0800 |
-| Commit | TBD |
+| Commit | b1cff01 |
 | Review evidence | 本地 review：旧 `test_identity_pages.py` 和 `test_messaging_objects.py` 已按域拆分；`tests/helpers.py` 只包含本地测试构造 helper；`tests/test_rwiki_cn_system.py` 仍默认 skip 并改用 helper 导入；未修改源码行为。 |
 | Verification evidence | compileall pass；`PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_messaging_surface.py tests/test_direct_messages.py tests/test_group_participant.py tests/test_attachments.py tests/test_sync_read_state.py tests/test_identity_documents.py tests/test_contact_auth_compat.py tests/test_profile_compat.py tests/test_agent_compat.py tests/test_site_relationships.py -q` 39 passed；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 64 passed, 2 skipped。 |
 | Next action | 进入 Step 06 |
