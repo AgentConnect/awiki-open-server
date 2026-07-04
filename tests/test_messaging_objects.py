@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 import time
 import urllib.parse
 
-import awiki_open_server.services as services
+import awiki_open_server.messaging.core as messaging_services
+import awiki_open_server.shared.runtime as runtime
 from awiki_open_server.app.main import create_app
 from awiki_open_server.app.settings import Settings
 from awiki_open_server.service_identity import content_digest
@@ -205,6 +206,15 @@ async def test_direct_group_participant_and_public_surface(client):
 
     public_denied = await rpc(client, "/anp-im/rpc", "direct.get_history", {"peer_did": bob_did}, token=alice_token)
     assert public_denied["error"]["message"] == "method_not_found"
+
+    for method, params in [
+        ("sync.delta", {"after_event_seq": 0}),
+        ("attachment.create_slot", {"attachment_id": "att-public-denied"}),
+        ("group.send", {"group_did": group_did, "text": "no public send"}),
+        ("group.leave", {"group_did": group_did}),
+    ]:
+        denied = await rpc(client, "/anp-im/rpc", method, params, token=alice_token)
+        assert denied["error"]["message"] == "method_not_found"
 
     for method in ["group.add", "group.remove", "group.update_profile", "group.update_policy"]:
         response = await rpc(client, "/im/rpc", method, {"group_did": group_did}, token=alice_token)
@@ -630,8 +640,8 @@ async def test_local_direct_to_remote_did_discovers_anp_service_and_posts(client
         captured["headers"] = headers or {}
         return remote_direct_result(payload)
 
-    monkeypatch.setattr(services, "_http_get_json", fake_get_json)
-    monkeypatch.setattr(services, "_http_post_json", fake_post_json)
+    monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
+    monkeypatch.setattr(messaging_services, "_http_post_json", fake_post_json)
 
     meta = {
         "anp_version": "1.0",
@@ -693,7 +703,7 @@ async def test_remote_direct_requires_origin_proof(client, monkeypatch):
             ],
         }
 
-    monkeypatch.setattr(services, "_http_get_json", fake_get_json)
+    monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
     rejected = await rpc(
         client,
         "/im/rpc",
@@ -733,7 +743,7 @@ async def test_remote_direct_rejects_invalid_origin_proof_signature(client, monk
             ],
         }
 
-    monkeypatch.setattr(services, "_http_get_json", fake_get_json)
+    monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
     meta = {
         "sender_did": alice_did,
         "target": {"kind": "agent", "did": remote_did},
@@ -777,8 +787,8 @@ async def test_remote_direct_rejects_message_service_incompatible_result(client,
     def fake_post_json(url: str, payload: dict, headers: dict | None = None, body_bytes: bytes | None = None):
         return remote_direct_result(payload, overrides={"target_did": "did:wba:awiki.info:users:other"})
 
-    monkeypatch.setattr(services, "_http_get_json", fake_get_json)
-    monkeypatch.setattr(services, "_http_post_json", fake_post_json)
+    monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
+    monkeypatch.setattr(messaging_services, "_http_post_json", fake_post_json)
     meta = {
         "sender_did": alice_did,
         "target": {"kind": "agent", "did": remote_did},
@@ -839,8 +849,8 @@ async def test_remote_direct_with_service_identity_adds_verifiable_http_signatur
             captured["body_bytes"] = body_bytes or b""
             return remote_direct_result(payload)
 
-        monkeypatch.setattr(services, "_http_get_json", fake_get_json)
-        monkeypatch.setattr(services, "_http_post_json", fake_post_json)
+        monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
+        monkeypatch.setattr(messaging_services, "_http_post_json", fake_post_json)
 
         meta = {
             "sender_did": alice_did,
@@ -886,7 +896,7 @@ async def test_public_anp_direct_requires_local_recipient(client, monkeypatch):
         assert url == "https://awiki.info/users/remote/did.json"
         return remote_doc
 
-    monkeypatch.setattr(services, "_http_get_json", fake_get_json)
+    monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
 
     reject_meta = {
         "anp_version": "1.0",
@@ -969,7 +979,7 @@ async def test_public_anp_direct_accepts_signed_peer_request(tmp_path, monkeypat
         assert url == "https://awiki.info/.well-known/did.json"
         return remote_doc
 
-    monkeypatch.setattr(services, "_http_get_json", fake_get_json)
+    monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as signed_client:
         alice_did, alice_token = await register(signed_client, "signed-inbound")
@@ -1036,7 +1046,7 @@ async def test_public_anp_direct_verifies_signature_against_public_base_url(tmp_
         assert url == "https://awiki.info/.well-known/did.json"
         return remote_doc
 
-    monkeypatch.setattr(services, "_http_get_json", fake_get_json)
+    monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://internal-testserver") as signed_client:
         local = await rpc(signed_client, "/did-auth/rpc", "register", {"handle": "signed-public-url"})
@@ -1096,7 +1106,7 @@ async def test_public_anp_group_join_requires_origin_and_peer_signature(tmp_path
         assert url == "https://awiki.info/.well-known/did.json"
         return remote_doc
 
-    monkeypatch.setattr(services, "_http_get_json", fake_get_json)
+    monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as signed_client:
         group_did = "did:wba:testserver:groups:open"
