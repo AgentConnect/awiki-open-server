@@ -2,20 +2,20 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：02  
-状态：reviewed
+状态：done
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | reviewed |
+| Status | done |
 | Branch | main |
 | Started | 2026-07-04 10:49:36 +0800 |
 | Completed | 2026-07-04 10:53:13 +0800 |
-| Commit | TBD |
+| Commit | db7f6e8 |
 | Review evidence | 本地 review 通过：route 注册改为读取 `Settings` 路径；DID document `serviceEndpoint` 与 custom `AWIKI_ANP_PUBLIC_RPC_PATH` 一致；public ANP 方法仍限定为 `anp.get_capabilities`、`direct.send`、`group.get_info`、`group.join`、`attachment.get_download_ticket`；未新增公开 API。 |
 | Verification evidence | `PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_route_config.py -q` 4 passed；`PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-asgi --data-dir /tmp/awiki-open-server-step02-asgi` ok=true；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 60 passed, 2 skipped；cross-domain local smoke ok=true。 |
-| Next action | 创建 Step 02 聚焦 commit；等待 Step 03 合并后执行 Wave B group gate |
+| Next action | 等待 Step 03 合并后执行 Wave B group gate |
 | Assigned agent | agent-routing |
 | Parallel group | B |
 | Parallel safe | yes |
@@ -25,7 +25,7 @@ Step index：02
 | Worktree / branch | main |
 | Merge gate | Route config gate |
 | Verification gate | focused route tests |
-| Gate status | pass_with_explicit_sdk_path |
+| Gate status | pass_with_explicit_sdk_path; committed as `db7f6e8` |
 
 ## 2. 目标
 
@@ -75,7 +75,7 @@ Step index：02
 - [x] 默认 `/anp-im/rpc` 仍可用。
 - [x] public handler 白名单不扩大。
 - [x] README/deploy 不再描述未实际支持的配置。
-- [ ] 本步骤在进入依赖步骤前已创建聚焦 commit。
+- [x] 本步骤在进入依赖步骤前已创建聚焦 commit。
 
 ## 8. 验证方式
 
