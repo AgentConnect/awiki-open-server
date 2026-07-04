@@ -2,30 +2,30 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：05  
-状态：draft
+状态：done
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | pending |
-| Branch | TBD |
-| Started | TBD |
-| Completed | TBD |
+| Status | done |
+| Branch | main |
+| Started | 2026-07-04 11:48:30 +0800 |
+| Completed | 2026-07-04 11:54:17 +0800 |
 | Commit | TBD |
-| Review evidence | TBD |
-| Verification evidence | TBD |
-| Next action | 拆分大测试文件并抽 helpers |
+| Review evidence | 本地 review：旧 `test_identity_pages.py` 和 `test_messaging_objects.py` 已按域拆分；`tests/helpers.py` 只包含本地测试构造 helper；`tests/test_rwiki_cn_system.py` 仍默认 skip 并改用 helper 导入；未修改源码行为。 |
+| Verification evidence | compileall pass；`PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_messaging_surface.py tests/test_direct_messages.py tests/test_group_participant.py tests/test_attachments.py tests/test_sync_read_state.py tests/test_identity_documents.py tests/test_contact_auth_compat.py tests/test_profile_compat.py tests/test_agent_compat.py tests/test_site_relationships.py -q` 39 passed；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 64 passed, 2 skipped。 |
+| Next action | 进入 Step 06 |
 | Assigned agent | agent-tests |
 | Parallel group | D |
 | Parallel safe | yes |
 | Parallel with | Step 06 |
 | Conflict resources | `awiki-open-server/tests/` |
-| Baseline commit | TBD |
-| Worktree / branch | TBD |
+| Baseline commit | 436be5d |
+| Worktree / branch | main |
 | Merge gate | Full local gate |
 | Verification gate | full pytest |
-| Gate status | pending |
+| Gate status | pass_with_explicit_sdk_path |
 
 ## 2. 目标
 
@@ -69,11 +69,11 @@ Step index：05
 
 ## 7. 验收标准
 
-- [ ] 大测试文件被拆分或显著缩小。
-- [ ] helpers 不依赖外部服务。
-- [ ] public tests 仍默认 skip。
-- [ ] 全量 pytest pass。
-- [ ] 本步骤已创建聚焦 commit。
+- [x] 大测试文件被拆分或显著缩小。
+- [x] helpers 不依赖外部服务。
+- [x] public tests 仍默认 skip。
+- [x] 全量 pytest pass。
+- [x] 本步骤已创建聚焦 commit。
 
 ## 8. 验证方式
 
@@ -88,11 +88,11 @@ Step index：05
 
 | Review 项 | 结果 | 备注 |
 |---|---|---|
-| 发现问题 | TBD | TBD |
-| 已修复问题 | TBD | TBD |
-| 剩余风险 | TBD | TBD |
-| 新增或缺失测试 | TBD | TBD |
-| 并行安全是否仍成立 | TBD | 与 Step 06 docs 无冲突 |
+| 发现问题 | `tests/test_rwiki_cn_system.py` 仍从旧 `test_messaging_objects` 导入 helper；`test_messaging_surface.py` 机械拆分后残留重复 helper | 全量收集和本地 review 发现 |
+| 已修复问题 | 改为从 `tests.helpers` 导入；删除重复 helper 并收窄 surface 测试 import | 不改测试语义 |
+| 剩余风险 | 历史 plan 文档仍引用旧测试文件名，Step 06 会同步当前主 README/AGENTS/deploy，不回改历史计划记录 | 可接受 |
+| 新增或缺失测试 | 未新增业务断言；原覆盖按域保留，public tests 仍 opt-in skip | 全量测试通过 |
+| 并行安全是否仍成立 | 是 | 与 Step 06 docs 无测试文件冲突 |
 
 ## 10. Commit 要求
 

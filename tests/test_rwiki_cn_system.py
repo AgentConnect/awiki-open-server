@@ -7,7 +7,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from tests.test_messaging_objects import did_keypair_document
+from tests.helpers import did_keypair_document
 
 
 RUN_PUBLIC_SYSTEM_TESTS = os.environ.get("AWIKI_RUN_PUBLIC_SYSTEM_TESTS", "").lower() in {"1", "true", "yes"}
