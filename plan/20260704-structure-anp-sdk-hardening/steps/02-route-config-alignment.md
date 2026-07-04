@@ -2,30 +2,30 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：02  
-状态：draft
+状态：reviewed
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | pending |
-| Branch | TBD |
-| Started | TBD |
-| Completed | TBD |
+| Status | reviewed |
+| Branch | main |
+| Started | 2026-07-04 10:49:36 +0800 |
+| Completed | 2026-07-04 10:53:13 +0800 |
 | Commit | TBD |
-| Review evidence | TBD |
-| Verification evidence | TBD |
-| Next action | 让 route 注册使用 settings 路径 |
+| Review evidence | 本地 review 通过：route 注册改为读取 `Settings` 路径；DID document `serviceEndpoint` 与 custom `AWIKI_ANP_PUBLIC_RPC_PATH` 一致；public ANP 方法仍限定为 `anp.get_capabilities`、`direct.send`、`group.get_info`、`group.join`、`attachment.get_download_ticket`；未新增公开 API。 |
+| Verification evidence | `PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_route_config.py -q` 4 passed；`PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-asgi --data-dir /tmp/awiki-open-server-step02-asgi` ok=true；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 60 passed, 2 skipped；cross-domain local smoke ok=true。 |
+| Next action | 创建 Step 02 聚焦 commit；等待 Step 03 合并后执行 Wave B group gate |
 | Assigned agent | agent-routing |
 | Parallel group | B |
 | Parallel safe | yes |
 | Parallel with | Step 03 |
 | Conflict resources | `awiki-open-server/src/awiki_open_server/app/routes.py`, `awiki-open-server/src/awiki_open_server/app/settings.py`, `awiki-open-server/deploy/*` |
-| Baseline commit | TBD |
-| Worktree / branch | TBD |
+| Baseline commit | ec6b8d6 |
+| Worktree / branch | main |
 | Merge gate | Route config gate |
 | Verification gate | focused route tests |
-| Gate status | pending |
+| Gate status | pass_with_explicit_sdk_path |
 
 ## 2. 目标
 
@@ -71,10 +71,10 @@ Step index：02
 
 ## 7. 验收标准
 
-- [ ] `AWIKI_ANP_PUBLIC_RPC_PATH` 修改后 DID 文档和实际 POST route 一致。
-- [ ] 默认 `/anp-im/rpc` 仍可用。
-- [ ] public handler 白名单不扩大。
-- [ ] README/deploy 不再描述未实际支持的配置。
+- [x] `AWIKI_ANP_PUBLIC_RPC_PATH` 修改后 DID 文档和实际 POST route 一致。
+- [x] 默认 `/anp-im/rpc` 仍可用。
+- [x] public handler 白名单不扩大。
+- [x] README/deploy 不再描述未实际支持的配置。
 - [ ] 本步骤在进入依赖步骤前已创建聚焦 commit。
 
 ## 8. 验证方式
@@ -90,11 +90,11 @@ Step index：02
 
 | Review 项 | 结果 | 备注 |
 |---|---|---|
-| 发现问题 | TBD | TBD |
-| 已修复问题 | TBD | TBD |
-| 剩余风险 | TBD | TBD |
-| 新增或缺失测试 | TBD | TBD |
-| 并行安全是否仍成立 | TBD | 与 Step 03 路由 import 无冲突 |
+| 发现问题 | 无阻塞问题 | 默认路径和 custom path 测试均通过。 |
+| 已修复问题 | 配置漂移 | `im_rpc_path`、`anp_public_rpc_path`、`ws_path`、object upload/download path 现在都会在启动时注册。 |
+| 剩余风险 | 环境需安装 ANP SDK 0.8.8 | 当前本机仍需 `PYTHONPATH=../anp/anp:src` 运行验证。 |
+| 新增或缺失测试 | 已新增 | `tests/test_route_config.py` 覆盖 custom ANP public path、IM path、WS path、object path。 |
+| 并行安全是否仍成立 | 是 | 未改 User Service compat 业务拆分区域；与 Step 03 仅可能在 imports 合并时需要协调。 |
 
 ## 10. Commit 要求
 

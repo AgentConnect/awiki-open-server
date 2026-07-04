@@ -78,7 +78,18 @@ def _contact_verification_settings(request: Request):
     return settings
 
 
+PUBLIC_ANP_METHODS = [
+    "anp.get_capabilities",
+    "direct.send",
+    "group.get_info",
+    "group.join",
+    "attachment.get_download_ticket",
+]
+
+
 def mount_routes(app: FastAPI) -> None:
+    settings = app.state.settings
+
     @app.get("/healthz")
     @app.get("/health")
     @app.get("/user-service/health")
@@ -188,20 +199,17 @@ def mount_routes(app: FastAPI) -> None:
     async def message_agent_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, MESSAGE_AGENT_HANDLERS)
 
-    @app.post("/im/rpc")
     async def im_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, MESSAGE_HANDLERS)
+    app.add_api_route(settings.im_rpc_path, im_rpc, methods=["POST"])
 
-    @app.post("/anp-im/rpc")
     async def anp_im_rpc(request: Request):
         raw_body = await request.body()
         request.state.raw_body = raw_body
         payload = json.loads(raw_body.decode() or "{}")
-        public_handlers = {
-            name: MESSAGE_HANDLERS[name]
-            for name in ["anp.get_capabilities", "direct.send", "group.get_info", "group.join", "attachment.get_download_ticket"]
-        }
+        public_handlers = {name: MESSAGE_HANDLERS[name] for name in PUBLIC_ANP_METHODS}
         return await dispatch(payload, request, public_handlers)
+    app.add_api_route(settings.anp_public_rpc_path, anp_im_rpc, methods=["POST"])
 
     @app.post("/auth/sms-codes")
     @app.post("/user-service/auth/sms-codes")
@@ -356,7 +364,6 @@ def mount_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=401, detail="invalid_ticket")
         return JSONResponse({"ok": True, "active": True, "did": did, "user_id": did}, headers=_identity_headers(did))
 
-    @app.websocket("/im/ws")
     async def im_ws(websocket: WebSocket):
         token = websocket.query_params.get("token") or websocket.query_params.get("ticket")
         did = did_for_token(websocket, token) if token else None
@@ -394,6 +401,7 @@ def mount_routes(app: FastAPI) -> None:
             pass
         finally:
             hub.unsubscribe(did, queue)
+    app.add_api_websocket_route(settings.ws_path, im_ws)
 
     @app.get("/content/{slug}.md")
     async def public_markdown(slug: str, request: Request):
@@ -435,14 +443,13 @@ def mount_routes(app: FastAPI) -> None:
         except Exception as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.put("/objects/upload/{slot_id}")
     async def upload_object(slot_id: str, request: Request, token: str | None = None):
         upload_token = token or request.headers.get("X-ANP-Upload-Token") or request.headers.get("x-anp-upload-token")
         if not upload_token:
             raise HTTPException(status_code=401, detail="missing_upload_token")
         return await upload_slot(slot_id, upload_token, await request.body(), request)
+    app.add_api_route(f"{settings.object_upload_path}/{{slot_id}}", upload_object, methods=["PUT"])
 
-    @app.get("/objects/{object_id}")
     async def download_object(object_id: str, request: Request, ticket: str | None = None):
         download_ticket = ticket
         auth = request.headers.get("authorization") or request.headers.get("Authorization")
@@ -465,6 +472,7 @@ def mount_routes(app: FastAPI) -> None:
         if not path.exists():
             raise HTTPException(status_code=404, detail="object_missing")
         return Response(path.read_bytes(), media_type=row["content_type"])
+    app.add_api_route(f"{settings.object_download_path}/{{object_id}}", download_object, methods=["GET"])
 
     @app.get("/.well-known/did.json")
     async def service_did(request: Request):

@@ -36,7 +36,11 @@ Useful configuration:
 | `AWIKI_SERVICE_PRIVATE_KEY_PEM` | unset | Ed25519 PKCS#8 PEM used to sign service-to-service HTTP requests. Use `\n` escapes when passing through env files. |
 | `AWIKI_SERVICE_PRIVATE_KEY_PATH` | unset | File path for the same Ed25519 private key. Prefer this for local deployment. |
 | `AWIKI_SERVICE_DID_DOCUMENT_JSON` | generated | Optional fixed service DID document. If omitted, the server generates one from the service private key. |
+| `AWIKI_IM_RPC_PATH` | `/im/rpc` | Local client JSON-RPC path. |
 | `AWIKI_ANP_PUBLIC_RPC_PATH` | `/anp-im/rpc` | Public ANP RPC path. |
+| `AWIKI_WS_PATH` | `/im/ws` | Local WebSocket notification path. |
+| `AWIKI_OBJECT_UPLOAD_PATH` | `/objects/upload` | Local object upload path prefix. |
+| `AWIKI_OBJECT_DOWNLOAD_PATH` | `/objects` | Local object download path prefix. |
 | `AWIKI_ALLOW_UNSIGNED_PEER_DEV` | `false` | Allows unsigned `/anp-im/rpc direct.send` only for local development tests. Do not enable for real interop. |
 | `AWIKI_DID_RESOLVER_BASE_URLS` | unset | Optional development resolver map such as `source.test=http://127.0.0.1:9001,target.test=http://127.0.0.1:9002` or a JSON object. Leave unset in normal public deployment. |
 | `AWIKI_DID_VERIFY_DEV_CODE` | `666666` | Local `/did-verify/rpc login` dev code. Falls back to `DEV_BYPASS_CODE` if set. |
@@ -276,10 +280,10 @@ testing:
 - `POST /site/rpc`
 - `GET /`
 - `GET /pages/{slug}.md`
-- `POST /im/rpc`
-- `POST /anp-im/rpc`
-- `PUT /objects/upload/{slot_id}`
-- `GET /objects/{object_id}`
+- `POST /im/rpc` by default, or `AWIKI_IM_RPC_PATH`
+- `POST /anp-im/rpc` by default, or `AWIKI_ANP_PUBLIC_RPC_PATH`
+- `PUT /objects/upload/{slot_id}` by default, or `AWIKI_OBJECT_UPLOAD_PATH/{slot_id}`
+- `GET /objects/{object_id}` by default, or `AWIKI_OBJECT_DOWNLOAD_PATH/{object_id}`
 - `GET /.well-known/did.json`
 - `GET /dids/resolve/{sub_path}/did.json`
 - `GET /{sub_path}/did.json`

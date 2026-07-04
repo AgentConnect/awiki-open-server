@@ -66,7 +66,7 @@ Harness：`awiki-harness/`
 | Step | 标题 | 依赖 | 并行组 | Parallel-safe | 建议 Agent | 可并行对象 | 互斥资源 / 冲突路径 | 产出 | 小 Plan 文档 | Commit gate | 合并 / 验证门禁 | 状态 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 01 | ANP SDK 0.8.8 接入与协议 adapter | 无 | A | 否 | agent-protocol | 无 | `pyproject.toml`, `service_identity.py`, `services.py` 协议函数 | SDK 依赖、adapter、parity tests | [steps/01-anp-sdk-adapter.md](steps/01-anp-sdk-adapter.md) | 必须 | SDK parity gate | done |
-| 02 | 路径配置与公开 endpoint 对齐 | Step 01 | B | 是 | agent-routing | Step 03 | `app/routes.py`, `app/settings.py`, `deploy/*` | 配置路径真实挂载，文档同步 | [steps/02-route-config-alignment.md](steps/02-route-config-alignment.md) | 必须 | Route config gate | pending |
+| 02 | 路径配置与公开 endpoint 对齐 | Step 01 | B | 是 | agent-routing | Step 03 | `app/routes.py`, `app/settings.py`, `deploy/*` | 配置路径真实挂载，文档同步 | [steps/02-route-config-alignment.md](steps/02-route-config-alignment.md) | 必须 | Route config gate | reviewed |
 | 03 | User Service 兼容模块拆分 | Step 01 | B | 是 | agent-user-compat | Step 02 | `services.py` identity/profile/handle/users/auth compat 区域 | `identity/` 或 `user_compat/` 模块 | [steps/03-user-service-compat-refactor.md](steps/03-user-service-compat-refactor.md) | 必须 | User compat gate | pending |
 | 04 | Messaging 与 attachment 模块拆分 | Step 02, Step 03 | C | 否 | agent-messaging | 无 | `services.py` direct/group/sync/attachment, `storage/db.py` | `messaging/`, `attachments/`, storage helpers | [steps/04-messaging-attachment-refactor.md](steps/04-messaging-attachment-refactor.md) | 必须 | Messaging gate | pending |
 | 05 | 测试拆分与验证矩阵收敛 | Step 04 | D | 是 | agent-tests | Step 06 | `tests/` | 测试按域拆分、helpers 抽取 | [steps/05-test-suite-split.md](steps/05-test-suite-split.md) | 必须 | Full local gate | pending |
@@ -113,7 +113,7 @@ Harness：`awiki-harness/`
 | Step | 状态 | Agent / Owner | 并行组 | 分支 / worktree | 基线 commit | 开始时间 | 完成时间 | Commit | Review 证据 | 验证证据 | 合并状态 | 门禁状态 | 下一步 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 01 | done | agent-protocol | A | main | 2b7c467 | 2026-07-04 10:26:58 +0800 | 2026-07-04 10:42:05 +0800 | 6d8c1cf | 本地 review + 并行 reviewer 通过：SDK import 集中在 adapter；未扩大 `/anp-im/rpc` 白名单；未引入手机/邮箱/Aliyun/E2EE/federation/group management；删除旧手写 HTTP Signature / origin proof helper；已补 HTTP signature SDK 异常映射和负例测试。 | `PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 56 passed, 2 skipped；compileall pass；cross-domain local smoke ok=true。标准 `PYTHONPATH=src` 被本机 `anp 0.6.8` 阻断，安装 0.8.8 受 PyPI SSL / hatchling 限制。 | committed | pass_with_explicit_sdk_path | 进入 Step 02/03 Wave B |
-| 02 | pending | agent-routing | B | TBD | TBD | TBD | TBD | TBD | TBD | TBD | not_started | pending | 等 Step 01 |
+| 02 | reviewed | agent-routing | B | main | ec6b8d6 | 2026-07-04 10:49:36 +0800 | 2026-07-04 10:53:13 +0800 | pending | 本地 review 通过：Settings 路径驱动 route 注册；public 白名单未扩大；README/env 示例同步。 | `PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_route_config.py -q` 4 passed；smoke-asgi ok=true；全量 tests 60 passed, 2 skipped；cross-domain smoke ok=true。 | not_committed | pass_with_explicit_sdk_path | 创建 Step 02 commit；等待 Step 03 |
 | 03 | pending | agent-user-compat | B | TBD | TBD | TBD | TBD | TBD | TBD | TBD | not_started | pending | 等 Step 01 |
 | 04 | pending | agent-messaging | C | TBD | TBD | TBD | TBD | TBD | TBD | TBD | not_started | pending | 等 Wave B |
 | 05 | pending | agent-tests | D | TBD | TBD | TBD | TBD | TBD | TBD | TBD | not_started | pending | 等 Step 04 |

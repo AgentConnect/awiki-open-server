@@ -302,6 +302,21 @@ def _discover_anp_service(did: str, settings: Settings) -> dict[str, Any]:
     return _anp_message_service(document)
 
 
+def _public_url(settings: Settings, path: str) -> str:
+    return f"{settings.public_base_url.rstrip('/')}{path}"
+
+
+def _object_upload_uri(settings: Settings, slot_id: str) -> str:
+    return _public_url(settings, f"{settings.object_upload_path}/{slot_id}")
+
+
+def _object_download_uri(settings: Settings, object_id: str, *, ticket: str | None = None) -> str:
+    uri = _public_url(settings, f"{settings.object_download_path}/{object_id}")
+    if ticket:
+        return f"{uri}?ticket={urllib.parse.quote(ticket, safe='')}"
+    return uri
+
+
 def _resolve_did_document_for_proof(request: Request, did: str) -> dict[str, Any]:
     with get_store(request).connect() as conn:
         row = conn.execute(
@@ -3057,8 +3072,8 @@ def attachment_create_slot(params: dict[str, Any], request: Request) -> dict[str
     upload_token = new_id("up")
     commit_token = new_id("commit")
     path = settings.object_dir / f"{object_id}.upload"
-    upload_uri = f"{settings.public_base_url.rstrip('/')}/objects/upload/{slot_id}"
-    object_uri = f"{settings.public_base_url.rstrip('/')}/objects/{object_id}"
+    upload_uri = _object_upload_uri(settings, slot_id)
+    object_uri = _object_download_uri(settings, object_id)
     expires_at = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
     with get_store(request).connect() as conn:
         conn.execute(
@@ -3111,7 +3126,7 @@ def attachment_commit(params: dict[str, Any], request: Request) -> dict[str, Any
         digest = hashlib.sha256(data).hexdigest()
         final = path.with_suffix(".bin")
         shutil.move(str(path), str(final))
-        object_uri = row["object_uri"] or f"{get_settings(request).public_base_url.rstrip('/')}/objects/{row['object_id']}"
+        object_uri = row["object_uri"] or _object_download_uri(get_settings(request), str(row["object_id"]))
         attachment_id = row["attachment_id"] or params.get("attachment_id")
         conn.execute(
             "INSERT INTO attachment_objects(object_id, source_attachment_id, object_uri, owner_did, path, size, sha256, content_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -3181,7 +3196,7 @@ def _require_ticket_string(params: dict[str, Any], key: str) -> str:
 def _ticket_object_uri(settings: Settings, object_id: str, stored_uri: Any) -> str:
     if isinstance(stored_uri, str) and stored_uri.strip():
         return stored_uri
-    return f"{settings.public_base_url.rstrip('/')}/objects/{object_id}"
+    return _object_download_uri(settings, object_id)
 
 
 def _ticket_direct_binding(params: dict[str, Any]) -> dict[str, Any]:
@@ -3360,7 +3375,7 @@ def attachment_ticket(params: dict[str, Any], request: Request) -> dict[str, Any
         elif row["owner_did"] != requester:
             raise Unauthorized("object_ticket_not_allowed")
         conn.execute("INSERT INTO download_tickets(ticket, object_id, expires_at) VALUES (?, ?, ?)", (ticket, object_id, expires_at))
-    download_uri = f"{settings.public_base_url.rstrip('/')}/objects/{object_id}?ticket={ticket}"
+    download_uri = _object_download_uri(settings, str(object_id), ticket=ticket)
     ticket_binding = binding or {
         "attachment_id": params.get("attachment_id") or row["source_attachment_id"],
         "object_uri": _ticket_object_uri(settings, str(row["object_id"]), row["object_uri"]),

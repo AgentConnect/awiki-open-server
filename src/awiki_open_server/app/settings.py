@@ -27,6 +27,13 @@ class Settings:
     enable_contact_verification_compat: bool = False
     contact_verification_dev_otp: str = "123456"
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "im_rpc_path", _normalize_route_path(self.im_rpc_path))
+        object.__setattr__(self, "anp_public_rpc_path", _normalize_route_path(self.anp_public_rpc_path))
+        object.__setattr__(self, "ws_path", _normalize_route_path(self.ws_path))
+        object.__setattr__(self, "object_upload_path", _normalize_route_path(self.object_upload_path))
+        object.__setattr__(self, "object_download_path", _normalize_route_path(self.object_download_path))
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "awiki-open-server.sqlite3"
@@ -60,11 +67,25 @@ def load_settings() -> Settings:
         allow_unsigned_peer_dev=os.environ.get("AWIKI_ALLOW_UNSIGNED_PEER_DEV", "").lower() in {"1", "true", "yes"},
         im_rpc_path=os.environ.get("AWIKI_IM_RPC_PATH", "/im/rpc"),
         anp_public_rpc_path=os.environ.get("AWIKI_ANP_PUBLIC_RPC_PATH", "/anp-im/rpc"),
+        ws_path=os.environ.get("AWIKI_WS_PATH", "/im/ws"),
+        object_upload_path=os.environ.get("AWIKI_OBJECT_UPLOAD_PATH", "/objects/upload"),
+        object_download_path=os.environ.get("AWIKI_OBJECT_DOWNLOAD_PATH", "/objects"),
         did_resolver_base_urls=resolver_base_urls,
         did_verify_dev_code=os.environ.get("AWIKI_DID_VERIFY_DEV_CODE") or os.environ.get("DEV_BYPASS_CODE") or "666666",
         enable_contact_verification_compat=os.environ.get("AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT", "").lower() in {"1", "true", "yes"},
         contact_verification_dev_otp=os.environ.get("AWIKI_CONTACT_VERIFICATION_DEV_OTP", "123456"),
     )
+
+
+def _normalize_route_path(path: str) -> str:
+    normalized = str(path or "").strip()
+    if not normalized:
+        raise ValueError("route path must not be empty")
+    if not normalized.startswith("/"):
+        normalized = f"/{normalized}"
+    while len(normalized) > 1 and normalized.endswith("/"):
+        normalized = normalized[:-1]
+    return normalized
 
 
 def _load_resolver_base_urls(raw: str | None) -> dict[str, str] | None:
