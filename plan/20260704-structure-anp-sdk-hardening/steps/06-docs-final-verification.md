@@ -12,7 +12,7 @@ Step index：06
 | Branch | main |
 | Started | 2026-07-04 11:55:54 +0800 |
 | Completed | 2026-07-04 11:59:52 +0800 |
-| Commit | TBD |
+| Commit | 6a3cd4b |
 | Review evidence | 本地 review + 只读 explorer：README/AGENTS/deploy 已同步 ANP SDK 0.8.8、模块结构、测试拆分、rwiki.cn 部署边界、contact verification 禁用和公网 nginx route；扫描确认生产代码未新增 `awiki.info` 代理、Aliyun、Redis/MySQL 或相邻服务依赖。 |
 | Verification evidence | `PYTHONPATH=../anp/anp:src python3 -m compileall -q src scripts tests` pass；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 64 passed, 2 skipped；ASGI smoke ok=true；cross-domain local smoke ok=true；Rust CLI local smoke ok=true；`verify-public https://rwiki.cn` ok=true；`AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1 ... tests/test_rwiki_cn_system.py -q` 2 passed；diff check pass。 |
 | Next action | 提交 Step 06 后结束计划 |
