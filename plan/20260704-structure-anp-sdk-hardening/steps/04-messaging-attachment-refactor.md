@@ -2,30 +2,30 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：04  
-状态：draft
+状态：done
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | pending |
-| Branch | TBD |
-| Started | TBD |
-| Completed | TBD |
-| Commit | TBD |
-| Review evidence | TBD |
-| Verification evidence | TBD |
-| Next action | 拆 direct/group/sync/read-state/attachment |
+| Status | done |
+| Branch | main |
+| Started | 2026-07-04 11:28:14 +0800 |
+| Completed | 2026-07-04 11:46:44 +0800 |
+| Commit | 1b5ab25 |
+| Review evidence | 本地 review + 只读 explorer：`services.py` 瘦身为兼容 facade；新增 `messaging/core.py`、`attachments/core.py`、`shared/runtime.py`；`routes.py` public allowlist 仍只暴露 5 个跨域方法；测试 monkeypatch 已跟随新模块边界；未引入 federation/E2EE/群管理/外部服务代理。 |
+| Verification evidence | compileall pass；`PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_messaging_objects.py tests/test_route_config.py -q` 28 passed；`PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` 64 passed, 2 skipped；smoke-asgi ok=true；cross-domain local smoke ok=true；production code forbidden dependency/domain scan pass。 |
+| Next action | 进入 Step 05/06 |
 | Assigned agent | agent-messaging |
 | Parallel group | C |
 | Parallel safe | no |
 | Parallel with | 无 |
 | Conflict resources | `awiki-open-server/src/awiki_open_server/services.py`, `awiki-open-server/src/awiki_open_server/storage/db.py` |
-| Baseline commit | TBD |
-| Worktree / branch | TBD |
+| Baseline commit | 0a51905 |
+| Worktree / branch | main |
 | Merge gate | Messaging gate |
 | Verification gate | messaging/attachment smoke |
-| Gate status | pending |
+| Gate status | pass_with_explicit_sdk_path |
 
 ## 2. 目标
 
@@ -72,12 +72,12 @@ Step index：04
 
 ## 7. 验收标准
 
-- [ ] `services.py` 不再承载主要 direct/group/attachment 实现。
-- [ ] public `/anp-im/rpc` 白名单未扩大。
-- [ ] direct cross-domain local smoke 通过。
-- [ ] group participant 仍不支持 create/manage。
-- [ ] attachment ticket 权限不回退。
-- [ ] 本步骤在进入 Step 05/06 前已创建聚焦 commit。
+- [x] `services.py` 不再承载主要 direct/group/attachment 实现。
+- [x] public `/anp-im/rpc` 白名单未扩大。
+- [x] direct cross-domain local smoke 通过。
+- [x] group participant 仍不支持 create/manage。
+- [x] attachment ticket 权限不回退。
+- [x] 本步骤在进入 Step 05/06 前已创建聚焦 commit。
 
 ## 8. 验证方式
 
@@ -93,10 +93,10 @@ Step index：04
 
 | Review 项 | 结果 | 备注 |
 |---|---|---|
-| 发现问题 | TBD | TBD |
-| 已修复问题 | TBD | TBD |
-| 剩余风险 | TBD | TBD |
-| 新增或缺失测试 | TBD | TBD |
+| 发现问题 | 测试仍 patch `services._http_get_json/_http_post_json`，拆分后不再命中新模块运行路径 | 已由 focused tests 暴露 |
+| 已修复问题 | 测试改为 patch `shared.runtime._http_get_json` 和 `messaging.core._http_post_json`；补 public allowlist deny 回归；direct/group sequence 改用既有 `Store.next_seq()` | 不改公开 API |
+| 剩余风险 | `messaging/core.py` 仍超过 1000 行，后续 Step 05/06 之后可再按 direct/group/read-state 分层 | 本步骤先保持搬迁不改行为 |
+| 新增或缺失测试 | 新增 `/anp-im/rpc` 对 `sync.delta`、`attachment.create_slot`、`group.send`、`group.leave` 的 `method_not_found` 回归 | 全量测试通过 |
 | 并行安全是否仍成立 | 不适用 | 串行步骤 |
 
 ## 10. Commit 要求
