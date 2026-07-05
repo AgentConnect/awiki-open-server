@@ -97,3 +97,19 @@ python3 -m pytest awiki-open-server/tests/test_rwiki_cn_system.py -q
 - systemd service 已 enabled，重启后使用当前仓库代码与 ANP SDK 0.8.8。
 - `AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT=false`，公网测试确认手机/邮箱验证接口禁用。
 - 本次失败点是远端 peer 的公开 DID 文档与签名私钥不一致，不是 `rwiki.cn` 部署链路不可用。
+
+## 8. 最终复测记录
+
+提交部署脚本与初始记录后，重新执行以下复测：
+
+- `git status --short --branch`：`main...origin/main`，无未提交变更。
+- `systemctl is-enabled awiki-open-server.service`：`enabled`。
+- `systemctl is-active awiki-open-server.service`：`active`。
+- `curl https://rwiki.cn/healthz`：`{"status":"ok","edition":"community"}`。
+- `verify-public --base-url https://rwiki.cn --did-domain rwiki.cn`：`ok=true`。
+- `AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1 ... tests/test_rwiki_cn_system.py -q`：`2 passed`。
+- Rust CLI `version`：`ok=true`，版本为 `dev`。
+- Rust CLI 连接 `https://rwiki.cn` 注册两个 `did:wba:rwiki.cn` 用户，direct send、Bob inbox、Bob history 通过；消息 `msg-18ae9a382f6bf558`。
+- Rust CLI 双域互通复测：`rwiki.cn -> awiki.info` 通过，消息 `msg-18ae8beb68a96b47`；`awiki.info -> rwiki.cn` 失败，错误仍为 `service rpc error -32001: invalid_peer_http_signature`。
+
+复测结论：`rwiki.cn` 部署、自启动、nginx 代理、本域 CLI E2E 和正向跨域发送均正常；完整双向互通仍阻塞在 `awiki.info` 侧服务 DID 文档与实际签名密钥不同步。
