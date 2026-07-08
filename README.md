@@ -1,5 +1,7 @@
 # awiki-open-server
 
+[English](README.md) | [简体中文](README.cn.md)
+
 Single-process Awiki Community Server MVP. It provides DID registration, public DID documents, profile APIs, Markdown Pages, plaintext direct messaging, group participant APIs, local attachment storage, sync/read-state, and a public `/anp-im/rpc` entry for cross-domain direct calls.
 
 This server implements those capabilities itself. It is not a proxy to `awiki.info`, and it does not require `awiki.info` or sibling AWiki services to run.
@@ -23,10 +25,13 @@ new domain logic should go into the domain package rather than back into
 
 ## Run Locally
 
-Install dependencies in your preferred Python environment:
+Use Python 3.10 or newer. If your system `python3` is older, create the
+environment with an explicit interpreter such as `python3.11`:
 
 ```bash
-python3 -m pip install -e '.[dev]'
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -U pip
+.venv/bin/python -m pip install -e '.[dev]'
 ```
 
 The dependency set pins ANP Python SDK `anp==0.8.8`; importing
@@ -42,9 +47,19 @@ PYTHONPATH=src \
 AWIKI_DATA_DIR=.awiki-open-server \
 AWIKI_PUBLIC_BASE_URL=http://127.0.0.1:8765 \
 AWIKI_DID_DOMAIN=localhost \
-python3 -m uvicorn 'awiki_open_server.app.main:create_app' \
+.venv/bin/python -m uvicorn 'awiki_open_server.app.main:create_app' \
   --factory --host 127.0.0.1 --port 8765
 ```
+
+Verify the running server:
+
+```bash
+curl --noproxy '*' http://127.0.0.1:8765/healthz
+```
+
+The expected response is `{"status":"ok","edition":"community"}`. The
+`--noproxy '*'` flag keeps local checks from being routed through a developer
+machine's HTTP proxy.
 
 Useful configuration:
 
@@ -92,7 +107,7 @@ is that `rwiki.cn` must proxy to this process, not to `awiki.info`,
 Run the test suite:
 
 ```bash
-PYTHONPATH=src python3 -m pytest tests -q
+PYTHONPATH=src .venv/bin/python -m pytest tests -q
 ```
 
 Focused suites:
@@ -106,14 +121,14 @@ Focused suites:
 Run an in-process CLI smoke without starting Uvicorn:
 
 ```bash
-PYTHONPATH=src python3 scripts/awiki_open_cli.py smoke-asgi \
+PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-asgi \
   --data-dir /tmp/awiki-open-server-cli-asgi
 ```
 
 Run a local HTTP smoke against a running server:
 
 ```bash
-PYTHONPATH=src python3 scripts/awiki_open_cli.py smoke-local \
+PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-local \
   --base-url http://127.0.0.1:8765 \
   --did-domain localhost
 ```
@@ -121,7 +136,7 @@ PYTHONPATH=src python3 scripts/awiki_open_cli.py smoke-local \
 Run a local two-server cross-domain smoke:
 
 ```bash
-PYTHONPATH=src python3 scripts/awiki_open_cli.py smoke-cross-domain-local \
+PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-cross-domain-local \
   --data-root /tmp/awiki-open-server-cross-domain-local --clean
 ```
 
@@ -136,7 +151,7 @@ interoperability gate.
 Check that a public deployment is really serving this repository:
 
 ```bash
-PYTHONPATH=src python3 scripts/awiki_open_cli.py verify-public \
+PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py verify-public \
   --base-url https://rwiki.cn \
   --did-domain rwiki.cn
 ```
@@ -149,7 +164,7 @@ Run the guarded public system tests against `rwiki.cn`:
 
 ```bash
 AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1 \
-PYTHONPATH=src python3 -m pytest tests/test_rwiki_cn_system.py -q
+PYTHONPATH=src .venv/bin/python -m pytest tests/test_rwiki_cn_system.py -q
 ```
 
 These tests are skipped by default in local and CI runs. When enabled, they
@@ -177,7 +192,7 @@ For a repeatable local Rust CLI compatibility gate, let this repository start
 its own temporary server and create two isolated CLI workspaces:
 
 ```bash
-PYTHONPATH=src python3 scripts/awiki_open_cli.py smoke-rust-cli-local \
+PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-rust-cli-local \
   --awiki-cli-bin /tmp/awiki-cli-rs2-open-server-target/debug/awiki-cli \
   --data-root /tmp/awiki-open-server-rust-cli-local --clean
 ```
@@ -234,7 +249,7 @@ an external User Service.
 Remote capability diagnostics can call the online `awiki.info` service, but `awiki.info` is a remote peer for interoperability testing, not this server's backend:
 
 ```bash
-PYTHONPATH=src python3 scripts/awiki_open_cli.py smoke-awiki-info \
+PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-awiki-info \
   --base-url https://awiki.info \
   --did-domain rwiki.cn
 ```

@@ -6,7 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
   "anp==0.8.8",
   "base58",
-  "cryptography",
+  "cryptography<49",
   "fastapi",
   "jcs",
   "pydantic",
