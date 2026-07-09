@@ -80,6 +80,15 @@ async def test_user_service_identity_compat_path_accepts_cli_did_document(client
     assert public_profile["result"]["user_id"] == did
     assert public_profile["result"]["service_endpoints"][0]["type"] == "ANPMessageService"
 
+    public_profile_by_bare_handle = await rpc(
+        client,
+        "/user-service/did/profile/rpc",
+        "get_public_profile",
+        {"handle": "cli-alice"},
+    )
+    assert public_profile_by_bare_handle["result"]["user_id"] == did
+    assert public_profile_by_bare_handle["result"]["handle"] == "cli-alice@testserver"
+
     resolved = await client.get("/cli-alice/e1_cli/did.json")
     assert resolved.status_code == 200
     assert resolved.json()["id"] == did
@@ -314,4 +323,3 @@ async def test_unsupported_identity_methods(client):
     reg = await rpc(client, "/did-auth/rpc", "register", {"handle": "bob"})
     response = await rpc(client, "/did-auth/rpc", "recover_handle", token=reg["result"]["token"])
     assert response["error"]["message"] == "not_supported"
-

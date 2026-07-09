@@ -420,13 +420,15 @@ def update_me(params: dict[str, Any], request: Request) -> dict[str, Any]:
 
 
 def public_profile(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    settings = get_settings(request)
     did = params.get("did") or params.get("user_id")
     handle = params.get("handle")
     with get_store(request).connect() as conn:
         if did:
             row = conn.execute("SELECT * FROM profiles WHERE did = ?", (did,)).fetchone()
         elif handle:
-            row = conn.execute("SELECT * FROM profiles WHERE handle = ?", (handle,)).fetchone()
+            _, _, stored_handle, _ = _split_handle(str(handle), settings.did_domain)
+            row = conn.execute("SELECT * FROM profiles WHERE handle = ?", (stored_handle,)).fetchone()
         else:
             raise InvalidParams("did_or_handle_required")
     if not row:
