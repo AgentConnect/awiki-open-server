@@ -114,6 +114,77 @@ async def test_user_service_identity_compat_path_accepts_cli_did_document(client
 
 
 @pytest.mark.asyncio
+async def test_recover_handle_rebinds_existing_handle_to_uploaded_did_document(client):
+    reg = await rpc(
+        client,
+        "/user-service/did-auth/rpc",
+        "register",
+        {"handle": "recover-cli", "display_name": "Recover CLI", "profile_md": "# Recover CLI\n"},
+    )
+    old_did = reg["result"]["did"]
+    old_token = reg["result"]["access_token"]
+    new_did = "did:wba:testserver:recover-cli:e1_recovered"
+    document = {"id": new_did, "service": []}
+
+    recovered = await rpc(
+        client,
+        "/user-service/did-auth/rpc",
+        "recover_handle",
+        {
+            "handle": "recover-cli.testserver",
+            "phone": "+8613800138000",
+            "otp_code": "123456",
+            "did_document": document,
+        },
+    )
+    result = recovered["result"]
+
+    assert result["did"] == new_did
+    assert result["user_id"] == new_did
+    assert result["handle"] == "recover-cli"
+    assert result["domain"] == "testserver"
+    assert result["full_handle"] == "recover-cli.testserver"
+    assert result["access_token"] == result["token"]
+    assert result["document"]["id"] == new_did
+    assert result["document"]["service"][0]["type"] == "ANPMessageService"
+
+    by_handle = await rpc(client, "/user-service/handle/rpc", "lookup", {"handle": "recover-cli"})
+    assert by_handle["result"]["did"] == new_did
+    assert by_handle["result"]["full_handle"] == "recover-cli.testserver"
+
+    by_new_did = await rpc(client, "/user-service/handle/rpc", "lookup", {"did": new_did})
+    assert by_new_did["result"]["handle"] == "recover-cli"
+
+    by_old_did = await rpc(client, "/user-service/handle/rpc", "lookup", {"did": old_did})
+    assert by_old_did["error"]["message"] == "handle_not_found"
+
+    old_me = await rpc(client, "/user-service/did/profile/rpc", "get_me", token=old_token)
+    assert old_me["error"]["message"] == "invalid_bearer_token"
+
+    new_me = await rpc(client, "/user-service/did/profile/rpc", "get_me", token=result["access_token"])
+    assert new_me["result"]["did"] == new_did
+    assert new_me["result"]["display_name"] == "Recover CLI"
+    assert new_me["result"]["profile_md"] == "# Recover CLI\n"
+
+
+@pytest.mark.asyncio
+async def test_recover_handle_requires_existing_handle(client):
+    response = await rpc(
+        client,
+        "/user-service/did-auth/rpc",
+        "recover_handle",
+        {
+            "handle": "missing-recover.testserver",
+            "phone": "+8613800138000",
+            "otp_code": "123456",
+            "did_document": {"id": "did:wba:testserver:missing-recover:e1_recovered", "service": []},
+        },
+    )
+
+    assert response["error"]["message"] == "handle_not_found"
+
+
+@pytest.mark.asyncio
 async def test_signed_cli_did_document_service_is_not_rewritten(client):
     did = "did:wba:testserver:signed-cli:e1_cli"
     service = {
@@ -316,10 +387,3 @@ async def test_cli_did_document_message_service_is_rehomed_to_open_server(client
     service = updated["result"]["did_document"]["service"][0]
     assert service["serviceEndpoint"] == "http://testserver/anp-im/rpc"
     assert service["serviceDid"] == "did:wba:testserver"
-
-
-@pytest.mark.asyncio
-async def test_unsupported_identity_methods(client):
-    reg = await rpc(client, "/did-auth/rpc", "register", {"handle": "bob"})
-    response = await rpc(client, "/did-auth/rpc", "recover_handle", token=reg["result"]["token"])
-    assert response["error"]["message"] == "not_supported"

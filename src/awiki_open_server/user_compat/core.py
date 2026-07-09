@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import Request
 
 from awiki_open_server.app.settings import Settings
-from awiki_open_server.shared.errors import InvalidParams, NotFound, NotSupported, Unauthorized
+from awiki_open_server.shared.errors import Conflict, InvalidParams, NotFound, NotSupported, Unauthorized
 from awiki_open_server.shared.ids import new_id, now_iso
 from awiki_open_server.storage.db import Store
 
@@ -227,9 +227,7 @@ def not_supported(params: dict[str, Any], request: Request) -> None:
 def register(params: dict[str, Any], request: Request) -> dict[str, Any]:
     settings = get_settings(request)
     raw_handle = params.get("handle") or f"user-{new_id('h')[2:8]}"
-    local_handle = str(raw_handle).split("@", 1)[0].split(".", 1)[0]
-    full_handle = str(raw_handle) if ("@" in str(raw_handle) or "." in str(raw_handle)) else f"{local_handle}.{settings.did_domain}"
-    stored_handle = str(raw_handle) if "@" in str(raw_handle) else f"{local_handle}@{settings.did_domain}"
+    local_handle, domain, stored_handle, full_handle = _split_handle(str(raw_handle), settings.did_domain)
     uploaded_doc = params.get("did_document") if isinstance(params.get("did_document"), dict) else None
     did = params.get("did") or (uploaded_doc or {}).get("id") or f"did:wba:{settings.did_domain}:users:{local_handle}"
     display_name = params.get("display_name") or local_handle
@@ -242,11 +240,27 @@ def register(params: dict[str, Any], request: Request) -> dict[str, Any]:
             (did, stored_handle, token, now_iso()),
         )
         conn.execute(
-            "INSERT INTO profiles(did, handle, display_name, avatar_uri, profile_uri, description, subject_type, profile_md) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (did, stored_handle, display_name, params.get("avatar_uri"), params.get("profile_uri"), params.get("description"), "human", params.get("profile_md")),
+            """
+            INSERT INTO profiles(
+                did, handle, display_name, avatar_uri, profile_uri, description, subject_type, profile_md
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                did,
+                stored_handle,
+                display_name,
+                params.get("avatar_uri"),
+                params.get("profile_uri"),
+                params.get("description"),
+                "human",
+                params.get("profile_md"),
+            ),
         )
         conn.execute(
-            "INSERT INTO did_documents(did, document_json, updated_at, status, revoked_at) VALUES (?, ?, ?, 'active', NULL)",
+            """
+            INSERT INTO did_documents(did, document_json, updated_at, status, revoked_at)
+            VALUES (?, ?, ?, 'active', NULL)
+            """,
             (did, _json(doc), now_iso()),
         )
     return {
@@ -254,7 +268,116 @@ def register(params: dict[str, Any], request: Request) -> dict[str, Any]:
         "user_id": did,
         "message": "Registration successful",
         "handle": local_handle,
-        "domain": settings.did_domain,
+        "domain": domain,
+        "full_handle": full_handle,
+        "token": token,
+        "access_token": token,
+        "document": doc,
+    }
+
+
+def recover_handle(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    settings = get_settings(request)
+    raw_handle = params.get("handle")
+    if not isinstance(raw_handle, str) or not raw_handle.strip():
+        raise InvalidParams("handle_required")
+    local_handle, domain, stored_handle, full_handle = _split_handle(
+        raw_handle,
+        settings.did_domain,
+    )
+    uploaded_doc = params.get("did_document") if isinstance(params.get("did_document"), dict) else None
+    did = params.get("did") or (uploaded_doc or {}).get("id")
+    if not did:
+        did = f"did:wba:{settings.did_domain}:users:{local_handle}"
+    did = str(did)
+    token = new_id("tok")
+    now = now_iso()
+    doc = _ensure_anp_message_service(uploaded_doc or did_document(settings, did, stored_handle), settings, did)
+    doc["id"] = did
+
+    with get_store(request).connect() as conn:
+        row = conn.execute(
+            """
+            SELECT u.did, u.handle, u.created_at,
+                   p.display_name, p.avatar_uri, p.profile_uri, p.description, p.subject_type, p.profile_md
+            FROM users u
+            JOIN profiles p ON p.did = u.did
+            LEFT JOIN did_documents d ON d.did = u.did
+            WHERE u.handle = ?
+              AND u.revoked_at IS NULL
+              AND COALESCE(d.status, 'active') = 'active'
+              AND d.revoked_at IS NULL
+            """,
+            (stored_handle,),
+        ).fetchone()
+        if not row:
+            raise NotFound("handle_not_found")
+
+        old_did = str(row["did"])
+        did_owner = conn.execute("SELECT did, handle FROM users WHERE did = ?", (did,)).fetchone()
+        if did_owner and old_did != did:
+            raise Conflict("did_already_registered")
+
+        display_name = params.get("display_name") or row["display_name"] or local_handle
+        avatar_uri = params.get("avatar_uri") if "avatar_uri" in params else row["avatar_uri"]
+        profile_uri = params.get("profile_uri") if "profile_uri" in params else row["profile_uri"]
+        description = params.get("description") if "description" in params else row["description"]
+        subject_type = params.get("subject_type") or row["subject_type"] or "human"
+        profile_md = params.get("profile_md") if "profile_md" in params else row["profile_md"]
+
+        if old_did == did:
+            conn.execute(
+                "UPDATE users SET token = ?, handle = ?, revoked_at = NULL WHERE did = ?",
+                (token, stored_handle, did),
+            )
+            conn.execute(
+                """
+                UPDATE profiles
+                SET handle = ?, display_name = ?, avatar_uri = ?, profile_uri = ?, description = ?,
+                    subject_type = ?, profile_md = ?
+                WHERE did = ?
+                """,
+                (stored_handle, display_name, avatar_uri, profile_uri, description, subject_type, profile_md, did),
+            )
+        else:
+            archived_handle = f"{local_handle}+recovered-{_sha256_hex(old_did)[:12]}@{domain}"
+            conn.execute("UPDATE users SET handle = ?, revoked_at = ? WHERE did = ?", (archived_handle, now, old_did))
+            conn.execute("UPDATE profiles SET handle = ? WHERE did = ?", (archived_handle, old_did))
+            conn.execute(
+                """
+                UPDATE did_documents
+                SET status = 'revoked', revoked_at = ?, updated_at = ?
+                WHERE did = ?
+                """,
+                (now, now, old_did),
+            )
+            conn.execute(
+                "INSERT INTO users(did, handle, token, created_at) VALUES (?, ?, ?, ?)",
+                (did, stored_handle, token, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO profiles(
+                    did, handle, display_name, avatar_uri, profile_uri, description, subject_type, profile_md
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (did, stored_handle, display_name, avatar_uri, profile_uri, description, subject_type, profile_md),
+            )
+
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO did_documents(did, document_json, updated_at, status, revoked_at)
+            VALUES (?, ?, ?, 'active', NULL)
+            """,
+            (did, _json(doc), now),
+        )
+
+    return {
+        "did": did,
+        "user_id": did,
+        "message": "Recovery successful",
+        "handle": local_handle,
+        "domain": domain,
         "full_handle": full_handle,
         "token": token,
         "access_token": token,
@@ -1363,7 +1486,7 @@ IDENTITY_HANDLERS = {
     "get_me": get_me,
     "revoke": revoke,
     "replace_did": not_supported,
-    "recover_handle": not_supported,
+    "recover_handle": recover_handle,
 }
 
 DID_VERIFY_HANDLERS = {
