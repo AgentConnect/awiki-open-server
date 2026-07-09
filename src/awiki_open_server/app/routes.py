@@ -389,6 +389,15 @@ def mount_routes(app: FastAPI) -> None:
             ],
         }
 
+    @app.get("/.well-known/handle/{local_part}")
+    async def handle_resolution(local_part: str, request: Request):
+        from awiki_open_server.user_compat.wns import publish_local_handle
+
+        try:
+            return publish_local_handle(local_part, request)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+
     async def resolve_did_path(sub_path: str, request: Request):
         settings = request.app.state.settings
         did_path = sub_path.strip("/")

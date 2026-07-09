@@ -23,6 +23,7 @@ class Settings:
     object_upload_path: str = "/objects/upload"
     object_download_path: str = "/objects"
     did_resolver_base_urls: dict[str, str] | None = None
+    wns_resolver_base_urls: dict[str, str] | None = None
     did_verify_dev_code: str = "666666"
     enable_contact_verification_compat: bool = False
     contact_verification_dev_otp: str = "123456"
@@ -57,6 +58,7 @@ def load_settings() -> Settings:
         os.environ.get("AWIKI_SERVICE_PRIVATE_KEY_PATH"),
     )
     resolver_base_urls = _load_resolver_base_urls(os.environ.get("AWIKI_DID_RESOLVER_BASE_URLS"))
+    wns_resolver_base_urls = _load_resolver_base_urls(os.environ.get("AWIKI_WNS_RESOLVER_BASE_URLS"))
     return Settings(
         data_dir=data_dir,
         public_base_url=public_base_url,
@@ -71,6 +73,7 @@ def load_settings() -> Settings:
         object_upload_path=os.environ.get("AWIKI_OBJECT_UPLOAD_PATH", "/objects/upload"),
         object_download_path=os.environ.get("AWIKI_OBJECT_DOWNLOAD_PATH", "/objects"),
         did_resolver_base_urls=resolver_base_urls,
+        wns_resolver_base_urls=wns_resolver_base_urls,
         did_verify_dev_code=os.environ.get("AWIKI_DID_VERIFY_DEV_CODE") or os.environ.get("DEV_BYPASS_CODE") or "666666",
         enable_contact_verification_compat=os.environ.get("AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT", "").lower() in {"1", "true", "yes"},
         contact_verification_dev_otp=os.environ.get("AWIKI_CONTACT_VERIFICATION_DEV_OTP", "123456"),

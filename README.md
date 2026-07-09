@@ -115,6 +115,7 @@ when deploying with real service keys.
 | `AWIKI_OBJECT_DOWNLOAD_PATH` | `/objects` | Local object download path prefix. |
 | `AWIKI_ALLOW_UNSIGNED_PEER_DEV` | `false` | Allows unsigned `/anp-im/rpc direct.send` only for local development tests. Do not enable for real interop. |
 | `AWIKI_DID_RESOLVER_BASE_URLS` | unset | Optional development resolver map such as `source.test=http://127.0.0.1:9001,target.test=http://127.0.0.1:9002` or a JSON object. Leave unset in normal public deployment. |
+| `AWIKI_WNS_RESOLVER_BASE_URLS` | unset | Optional development WNS resolver map with the same shape as `AWIKI_DID_RESOLVER_BASE_URLS`. Leave unset in normal public deployment. |
 | `AWIKI_DID_VERIFY_DEV_CODE` | `666666` | Local `/did-verify/rpc login` dev code. Falls back to `DEV_BYPASS_CODE` if set. |
 | `AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT` | `false` | Enables legacy local phone/email verification shims for old client tests. Keep disabled for the MVP and public deployment. |
 | `AWIKI_CONTACT_VERIFICATION_DEV_OTP` | `123456` | Local compatibility OTP used only when contact verification compatibility is explicitly enabled. |
@@ -313,7 +314,7 @@ testing.
 | `GET /me`<br>`PATCH /me`<br>`POST /me/rpc`<br>`GET /user-service/me`<br>`PATCH /user-service/me`<br>`POST /user-service/me/rpc` | Current-user profile compatibility. | Uses local Community tokens and local DID identity. |
 | `GET /profiles/{user_id}`<br>`GET /user-service/profiles/{user_id}`<br>`GET /users/{user_id}/profile`<br>`GET /user-service/users/{user_id}/profile` | Profile lookup compatibility. | In this server, `user_id` is the local DID. |
 | `POST /users/rpc`<br>`POST /user-service/users/rpc` | Older user lookup RPC compatibility. | Local only. Does not call an external User Service. |
-| `POST /handle/rpc`<br>`POST /user-service/handle/rpc` | Handle compatibility RPC. | Uses this server's configured DID domain. |
+| `POST /handle/rpc`<br>`POST /user-service/handle/rpc` | Handle compatibility RPC. | Local handles use this server's configured DID domain. Fully qualified remote handles resolve through WNS `https://{domain}/.well-known/handle/{local}` and then DID document discovery. |
 | `POST /did/relationships/rpc`<br>`POST /user-service/did/relationships/rpc` | Local DID relationships. | Supports `follow`, `unfollow`, `get_following`, `get_followers`, and `get_status` for users registered in the configured DID domain. |
 | `POST /user-service/agent-registration/rpc` | Agent registration compatibility. | Local one-time agent registration token support. |
 | `POST /user-service/agent-inventory/rpc` | Agent inventory compatibility. | Covers local daemon and inventory fields used by current clients. |
@@ -334,6 +335,7 @@ testing.
 | `PUT /objects/upload/{slot_id}` or `AWIKI_OBJECT_UPLOAD_PATH/{slot_id}` | Attachment upload data plane. | Accepts `?token=...` or returned `X-ANP-Upload-Token`. |
 | `GET /objects/{object_id}` or `AWIKI_OBJECT_DOWNLOAD_PATH/{object_id}` | Attachment download data plane. | Accepts `?ticket=...` and `Authorization: Bearer <download_ticket>`. |
 | `GET /.well-known/did.json` | Public service DID document. | Must be served by this process for real public interop. |
+| `GET /.well-known/handle/{local_part}` | Public WNS Handle Resolution endpoint. | Publishes local active handle to DID bindings for this server's configured domain. |
 | `GET /dids/resolve/{sub_path}/did.json`<br>`GET /{sub_path}/did.json` | Public DID document resolution. | Publishes local DID documents for the configured domain. |
 
 ## JSON-RPC Surfaces
@@ -344,6 +346,27 @@ testing.
 | Public `/anp-im/rpc` | `anp.get_capabilities`, `direct.send`, `group.get_info`, `group.join`, `attachment.get_download_ticket`. | Cross-domain entry. Public `direct.send` and `group.join` require business `auth.origin_proof` plus service-to-service HTTP Signature unless unsigned peer dev mode is enabled. |
 | DID relationships | `follow`, `unfollow`, `get_following`, `get_followers`, `get_status`. | Only operates on users registered in this server's configured DID domain. |
 | Site RPC | `get_root`, `set_root`, `list_pages`, `get_page`, `create_page`, `update_page`, `rename_page`, `delete_page`. | Small Markdown site compatibility surface for the configured local domain. |
+
+## Handle Resolution
+
+This server implements WNS as both a provider and a consumer:
+
+- Provider: local active handles are published at
+  `/.well-known/handle/{local_part}`.
+- Consumer: fully qualified non-local handles such as `alice.example.com` are
+  resolved through `https://example.com/.well-known/handle/alice`.
+- After Handle resolution, the server resolves the returned DID document and
+  requires an `ANPMessageService` before treating the identity as messageable.
+- If the DID document declares `ANPHandleService`, the server attempts reverse
+  confirmation and returns `verification_level` such as
+  `bidirectional_exact`, `provider_confirmed`, or `forward_only`.
+- For ordinary recipient lookup, `forward_only` remains usable so existing
+  deployments such as `awiki.ai` do not need to be upgraded before interop works.
+
+Remote resolution is intentionally defensive: production resolution requires
+HTTPS and rejects private, loopback, link-local, reserved, multicast, and
+unspecified addresses. Local HTTP/private targets are only allowed through
+explicit development resolver maps.
 
 ## Messaging Semantics
 

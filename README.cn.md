@@ -106,6 +106,7 @@ curl --noproxy '*' http://127.0.0.1:8765/healthz
 | `AWIKI_OBJECT_DOWNLOAD_PATH` | `/objects` | 本地对象下载路径前缀。 |
 | `AWIKI_ALLOW_UNSIGNED_PEER_DEV` | `false` | 仅为本地开发测试允许未签名的 `/anp-im/rpc direct.send`。不要在真实互通中启用。 |
 | `AWIKI_DID_RESOLVER_BASE_URLS` | 未设置 | 可选的开发解析器映射，例如 `source.test=http://127.0.0.1:9001,target.test=http://127.0.0.1:9002` 或 JSON 对象。正常公开部署保持未设置。 |
+| `AWIKI_WNS_RESOLVER_BASE_URLS` | 未设置 | 可选的 WNS 开发解析器映射，格式与 `AWIKI_DID_RESOLVER_BASE_URLS` 相同。正常公开部署保持未设置。 |
 | `AWIKI_DID_VERIFY_DEV_CODE` | `666666` | 本地 `/did-verify/rpc login` 开发验证码。如果设置了 `DEV_BYPASS_CODE`，则回退使用它。 |
 | `AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT` | `false` | 为旧客户端测试启用遗留本地手机号/邮箱验证 shim。MVP 和公开部署应保持关闭。 |
 | `AWIKI_CONTACT_VERIFICATION_DEV_OTP` | `123456` | 仅在显式启用 contact verification 兼容时使用的本地兼容 OTP。 |
@@ -281,7 +282,7 @@ PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-awiki-info \
 | `GET /me`<br>`PATCH /me`<br>`POST /me/rpc`<br>`GET /user-service/me`<br>`PATCH /user-service/me`<br>`POST /user-service/me/rpc` | 当前用户 profile 兼容。 | 使用本地 Community token 和本地 DID 身份。 |
 | `GET /profiles/{user_id}`<br>`GET /user-service/profiles/{user_id}`<br>`GET /users/{user_id}/profile`<br>`GET /user-service/users/{user_id}/profile` | Profile 查询兼容。 | 在这个服务器中，`user_id` 是本地 DID。 |
 | `POST /users/rpc`<br>`POST /user-service/users/rpc` | 旧版用户查询 RPC 兼容。 | 仅本地实现，不调用外部 User Service。 |
-| `POST /handle/rpc`<br>`POST /user-service/handle/rpc` | Handle 兼容 RPC。 | 使用本服务器配置的 DID 域名。 |
+| `POST /handle/rpc`<br>`POST /user-service/handle/rpc` | Handle 兼容 RPC。 | 本地 handle 使用本服务器配置的 DID 域名。完整远端 handle 会通过 WNS `https://{domain}/.well-known/handle/{local}` 解析，再继续解析 DID 文档。 |
 | `POST /did/relationships/rpc`<br>`POST /user-service/did/relationships/rpc` | 本地 DID 关系。 | 支持 `follow`、`unfollow`、`get_following`、`get_followers` 和 `get_status`，只作用于配置 DID 域名中已注册的用户。 |
 | `POST /user-service/agent-registration/rpc` | Agent 注册兼容。 | 支持本地一次性 agent 注册 token。 |
 | `POST /user-service/agent-inventory/rpc` | Agent inventory 兼容。 | 覆盖当前客户端使用的本地 daemon 和 inventory 字段。 |
@@ -302,6 +303,7 @@ PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-awiki-info \
 | `PUT /objects/upload/{slot_id}` 或 `AWIKI_OBJECT_UPLOAD_PATH/{slot_id}` | 附件上传数据平面。 | 接受 `?token=...` 或返回的 `X-ANP-Upload-Token`。 |
 | `GET /objects/{object_id}` 或 `AWIKI_OBJECT_DOWNLOAD_PATH/{object_id}` | 附件下载数据平面。 | 接受 `?ticket=...` 和 `Authorization: Bearer <download_ticket>`。 |
 | `GET /.well-known/did.json` | 公开服务 DID 文档。 | 真实公开互通时必须由这个进程提供。 |
+| `GET /.well-known/handle/{local_part}` | 公开 WNS Handle Resolution 端点。 | 发布本服务器配置域名下活跃本地 handle 到 DID 的绑定。 |
 | `GET /dids/resolve/{sub_path}/did.json`<br>`GET /{sub_path}/did.json` | 公开 DID 文档解析。 | 发布配置域名下的本地 DID 文档。 |
 
 ## JSON-RPC 能力面
@@ -312,6 +314,24 @@ PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-awiki-info \
 | 公开 `/anp-im/rpc` | `anp.get_capabilities`、`direct.send`、`group.get_info`、`group.join`、`attachment.get_download_ticket`。 | 跨域入口。公开 `direct.send` 和 `group.join` 要求业务层 `auth.origin_proof` 和服务间 HTTP Signature，除非启用了 unsigned peer dev 模式。 |
 | DID 关系 | `follow`、`unfollow`、`get_following`、`get_followers`、`get_status`。 | 只作用于本服务器配置 DID 域名中已注册的用户。 |
 | Site RPC | `get_root`、`set_root`、`list_pages`、`get_page`、`create_page`、`update_page`、`rename_page`、`delete_page`。 | 面向配置本地域名的小型 Markdown 站点兼容面。 |
+
+## Handle 解析
+
+这个服务器同时作为 WNS provider 和 consumer：
+
+- Provider：本地活跃 handle 会发布在 `/.well-known/handle/{local_part}`。
+- Consumer：完整的非本地域 handle，例如 `alice.example.com`，会通过
+  `https://example.com/.well-known/handle/alice` 解析。
+- Handle 解析后，服务器继续解析返回的 DID Document，并要求其中存在
+  `ANPMessageService`，才把该身份视为可发送消息的目标。
+- 如果 DID Document 声明了 `ANPHandleService`，服务器会尝试反向确认，并返回
+  `verification_level`，例如 `bidirectional_exact`、`provider_confirmed`
+  或 `forward_only`。
+- 普通收件人查找中，`forward_only` 仍然可用，这样 `awiki.ai` 这类现有部署不需要先升级就能互通。
+
+远端解析默认采用防御式策略：生产解析要求 HTTPS，并拒绝私网、loopback、
+link-local、reserved、multicast 和 unspecified 地址。只有通过显式开发解析器
+映射配置的本地 HTTP/private 目标才会被允许。
 
 ## 消息语义
 

@@ -72,6 +72,22 @@ async def test_group_participant_local_views_require_membership(client):
         token=bob_token,
     )
     assert [message["message_id"] for message in bob_thread["result"]["messages"]] == [sent["result"]["message_id"]]
+    alice_delta = await rpc(
+        client,
+        "/im/rpc",
+        "sync.delta",
+        {"since_event_seq": 0, "limit": 100},
+        token=alice_token,
+    )
+    message_event = next(event for event in alice_delta["result"]["events"] if event["event_type"] == "message.created")
+    assert message_event["aggregate_kind"] == "group_message"
+    assert message_event["aggregate_id"] == f"{group_did}:{sent['result']['server_seq']}"
+    assert message_event["payload"]["thread"] == {"kind": "group", "group_did": group_did}
+    assert message_event["payload"]["message"]["id"] == f"{group_did}:{sent['result']['server_seq']}"
+    assert message_event["payload"]["message"]["message_id"] == sent["result"]["message_id"]
+    assert message_event["payload"]["message"]["group_did"] == group_did
+    assert message_event["payload"]["message"]["group_event_seq"] == str(sent["result"]["server_seq"])
+    assert message_event["payload"]["message"]["content"] == "member only"
 
     left = await rpc(client, "/im/rpc", "group.leave", {"group_did": group_did}, token=alice_token)
     assert left["result"]["left"] is True
@@ -284,4 +300,3 @@ async def test_public_anp_group_join_requires_origin_and_peer_signature(tmp_path
         assert data["result"]["joined"] is True
         assert data["result"]["group_did"] == group_did
         assert data["result"]["member_did"] == remote_user_did
-

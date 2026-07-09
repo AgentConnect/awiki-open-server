@@ -25,6 +25,16 @@ _publish_realtime = runtime._publish_realtime
 _user_exists = runtime._user_exists
 add_sync_event = runtime.add_sync_event
 
+SYNC_EVENT_MESSAGE_CREATED = "message.created"
+SYNC_EVENT_GROUP_MEMBER_CHANGED = "group.member_changed"
+LEGACY_DIRECT_MESSAGE_CREATED = "direct.message.created"
+LEGACY_GROUP_MESSAGE_CREATED = "group.message.created"
+LEGACY_GROUP_JOINED_EVENTS = {"group.joined", "group.member.joined"}
+LEGACY_GROUP_LEFT_EVENTS = {"group.left", "group.member.left"}
+DIRECT_PROFILE = "anp.direct.base.v1"
+GROUP_PROFILE = "anp.group.base.v1"
+TRANSPORT_SECURITY_PROFILE = "transport-protected"
+
 
 def _http_post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None, body_bytes: bytes | None = None) -> dict[str, Any]:
     return runtime._http_post_json(url, payload, headers=headers, body_bytes=body_bytes)
@@ -116,10 +126,10 @@ def _store_direct_message(
         )
         if sender_local:
             conn.execute("INSERT OR IGNORE INTO direct_message_views(owner_did, message_id, peer_did) VALUES (?, ?, ?)", (sender, message_id, recipient))
-            add_sync_event(conn, sender, "direct.message.created", {"message_id": message_id, "peer_did": recipient, "server_seq": seq})
+            add_sync_event(conn, sender, SYNC_EVENT_MESSAGE_CREATED, {"message_id": message_id, "peer_did": recipient, "server_seq": seq})
         if recipient_local:
             conn.execute("INSERT OR IGNORE INTO direct_message_views(owner_did, message_id, peer_did) VALUES (?, ?, ?)", (recipient, message_id, sender))
-            recipient_event_seq = add_sync_event(conn, recipient, "direct.message.created", {"message_id": message_id, "peer_did": sender, "server_seq": seq})
+            recipient_event_seq = add_sync_event(conn, recipient, SYNC_EVENT_MESSAGE_CREATED, {"message_id": message_id, "peer_did": sender, "server_seq": seq})
     accepted_at = now_iso()
     result = {
         "accepted": delivery_state in {"accepted", "delivered"},
@@ -140,20 +150,19 @@ def _store_direct_message(
             request,
             recipient,
             "direct.incoming",
-            {
-                "message": {
-                    "message_id": message_id,
-                    "sender_did": sender,
-                    "recipient_did": recipient,
-                    "content_type": content_type,
-                    "body": body,
-                    "server_seq": seq,
-                    "created_at": accepted_at,
-                }
-            },
+            _direct_realtime_params(
+                message_id=message_id,
+                operation_id=operation_id,
+                sender=sender,
+                recipient=recipient,
+                body=body,
+                content_type=content_type,
+                created_at=accepted_at,
+                server_seq=seq,
+            ),
             {
                 "owner_did": recipient,
-                "event_type": "direct.message.created",
+                "event_type": SYNC_EVENT_MESSAGE_CREATED,
                 "event_seq": str(recipient_event_seq or 0),
                 "server_seq": str(seq),
             },
@@ -205,17 +214,16 @@ def _accept_ephemeral_direct(
             request,
             recipient,
             "direct.incoming",
-            {
-                "message": {
-                    "message_id": message_id,
-                    "sender_did": sender,
-                    "recipient_did": recipient,
-                    "content_type": content_type,
-                    "body": body,
-                    "delivery_state": "ephemeral",
-                    "created_at": accepted_at,
-                }
-            },
+            _direct_realtime_params(
+                message_id=message_id,
+                operation_id=operation_id,
+                sender=sender,
+                recipient=recipient,
+                body=body,
+                content_type=content_type,
+                created_at=accepted_at,
+                server_seq="",
+            ),
         )
     return result
 
@@ -545,6 +553,111 @@ def _project_message_content(body: Any, content_type: str) -> tuple[str, Any]:
     return "json", body
 
 
+def _direct_thread_for_message(message: dict[str, Any], owner_did: str | None = None) -> dict[str, str]:
+    peer = message["receiver_did"] if owner_did and owner_did == message["sender_did"] else message["sender_did"]
+    return {"kind": "direct", "peer_did": peer}
+
+
+def _direct_realtime_params(
+    *,
+    message_id: str,
+    operation_id: str | None,
+    sender: str,
+    recipient: str,
+    body: dict[str, Any],
+    content_type: str,
+    created_at: str,
+    server_seq: int | str,
+) -> dict[str, Any]:
+    return {
+        "meta": {
+            "profile": DIRECT_PROFILE,
+            "security_profile": TRANSPORT_SECURITY_PROFILE,
+            "message_id": message_id,
+            **({"operation_id": operation_id} if operation_id else {}),
+            "sender_did": sender,
+            "target": {"kind": "agent", "did": recipient},
+            "content_type": content_type,
+            "created_at": created_at,
+            "server_seq": str(server_seq),
+        },
+        "body": body,
+    }
+
+
+def _group_realtime_params(
+    *,
+    message_id: str,
+    operation_id: str | None,
+    sender: str,
+    owner_did: str,
+    group_did: str,
+    body: dict[str, Any],
+    content_type: str,
+    created_at: str,
+    server_seq: int | str,
+) -> dict[str, Any]:
+    group_event_seq = str(server_seq)
+    return {
+        "meta": {
+            "profile": GROUP_PROFILE,
+            "security_profile": TRANSPORT_SECURITY_PROFILE,
+            "message_id": message_id,
+            **({"operation_id": operation_id} if operation_id else {}),
+            "sender_did": sender,
+            "target": {"kind": "agent", "did": owner_did},
+            "content_type": content_type,
+            "created_at": created_at,
+            "server_seq": group_event_seq,
+        },
+        "body": {
+            **body,
+            "group_did": group_did,
+            "group_event_seq": group_event_seq,
+            "group_state_version": group_event_seq,
+            "accepted_at": created_at,
+        },
+    }
+
+
+def _group_state_realtime_params(
+    *,
+    owner_did: str,
+    group_did: str,
+    change: str,
+    member_did: str,
+    membership_status: str,
+    event_seq: int | str,
+    operation_id: str | None = None,
+) -> dict[str, Any]:
+    group_event_seq = str(event_seq)
+    subject_method = "group.leave" if membership_status == "left" else "group.join"
+    changed_at = now_iso()
+    return {
+        "meta": {
+            "profile": GROUP_PROFILE,
+            "security_profile": TRANSPORT_SECURITY_PROFILE,
+            **({"operation_id": operation_id} if operation_id else {}),
+            "sender_did": group_did,
+            "target": {"kind": "agent", "did": owner_did},
+            "created_at": changed_at,
+        },
+        "body": {
+            "group_did": group_did,
+            "change": change,
+            "event_type": "member-left" if membership_status == "left" else "member-activated",
+            "member_did": member_did,
+            "actor_did": member_did,
+            "subject_did": member_did,
+            "subject_method": subject_method,
+            "membership_status": membership_status,
+            "group_event_seq": group_event_seq,
+            "group_state_version": group_event_seq,
+            "changed_at": changed_at,
+        },
+    }
+
+
 def _direct_message_result(row: Any, owner_did: str | None = None) -> dict[str, Any]:
     body = _load(row["body_json"])
     sender = row["sender_did"]
@@ -568,6 +681,63 @@ def _direct_message_result(row: Any, owner_did: str | None = None) -> dict[str, 
         "is_read": read_at is not None,
         "read_at": read_at,
         "direction": direction,
+    }
+
+
+def _direct_sync_event_from_message(event_row: Any, message: dict[str, Any], owner_did: str) -> dict[str, Any]:
+    thread = _direct_thread_for_message(message, owner_did)
+    return {
+        "event_id": event_row["event_id"],
+        "event_seq": str(event_row["event_seq"]),
+        "event_type": SYNC_EVENT_MESSAGE_CREATED,
+        "aggregate_kind": "direct_message",
+        "aggregate_id": message["message_id"],
+        "owner_subject_id": owner_did,
+        "created_at": event_row["created_at"],
+        "payload": {
+            "thread_kind": "direct",
+            "thread": thread,
+            "message": {
+                "id": message["message_id"],
+                "server_seq": str(message["server_seq"]),
+                "sender_did": message["sender_did"],
+                "receiver_did": message["receiver_did"],
+                "content_type": message["content_type"],
+                "content": message["content"],
+                "sent_at": message["sent_at"],
+                "received_at": message["received_at"],
+            },
+        },
+    }
+
+
+def _group_sync_event_from_message(event_row: Any, message: dict[str, Any], owner_did: str) -> dict[str, Any]:
+    server_seq = str(message["server_seq"])
+    canonical_message_id = f"{message['group_did']}:{server_seq}"
+    return {
+        "event_id": event_row["event_id"],
+        "event_seq": str(event_row["event_seq"]),
+        "event_type": SYNC_EVENT_MESSAGE_CREATED,
+        "aggregate_kind": "group_message",
+        "aggregate_id": canonical_message_id,
+        "owner_subject_id": owner_did,
+        "created_at": event_row["created_at"],
+        "payload": {
+            "thread_kind": "group",
+            "thread": {"kind": "group", "group_did": message["group_did"]},
+            "message": {
+                "id": canonical_message_id,
+                "message_id": message["message_id"],
+                "server_seq": server_seq,
+                "group_event_seq": server_seq,
+                "group_did": message["group_did"],
+                "sender_did": message["sender_did"],
+                "content_type": message["content_type"],
+                "content": message["content"],
+                "sent_at": message["sent_at"],
+                "received_at": message["received_at"],
+            },
+        },
     }
 
 
@@ -793,12 +963,12 @@ def group_join(params: dict[str, Any], request: Request) -> dict[str, Any]:
         members = conn.execute("SELECT member_did FROM group_members WHERE group_did = ?", (group["group_did"],)).fetchall()
         for member_row in members:
             owner_did = str(member_row["member_did"])
-            event_type = "group.joined" if owner_did == did else "group.member.joined"
+            event_type = SYNC_EVENT_GROUP_MEMBER_CHANGED
             event_seq = add_sync_event(
                 conn,
                 owner_did,
                 event_type,
-                {"group_did": group["group_did"], "member_did": did},
+                {"group_did": group["group_did"], "member_did": did, "membership_status": "active"},
             )
             member_events.append((owner_did, event_seq, event_type))
     for owner_did, event_seq, event_type in member_events:
@@ -806,7 +976,15 @@ def group_join(params: dict[str, Any], request: Request) -> dict[str, Any]:
             request,
             owner_did,
             "group.state_changed",
-            {"group_did": group["group_did"], "change": "member_joined", "member_did": did},
+            _group_state_realtime_params(
+                owner_did=owner_did,
+                group_did=group["group_did"],
+                change="member_joined",
+                member_did=did,
+                membership_status="active",
+                event_seq=event_seq,
+                operation_id=params.get("operation_id") or meta.get("operation_id"),
+            ),
             {"owner_did": owner_did, "event_type": event_type, "event_seq": str(event_seq)},
         )
     return {"joined": True, "group_did": group["group_did"], "member_did": did}
@@ -824,15 +1002,28 @@ def group_leave(params: dict[str, Any], request: Request) -> dict[str, Any]:
         members = conn.execute("SELECT member_did FROM group_members WHERE group_did = ?", (group_did,)).fetchall()
         owner_dids = {str(did), *(str(row["member_did"]) for row in members)}
         for owner_did in owner_dids:
-            event_type = "group.left" if owner_did == did else "group.member.left"
-            event_seq = add_sync_event(conn, owner_did, event_type, {"group_did": group_did, "member_did": did})
+            event_type = SYNC_EVENT_GROUP_MEMBER_CHANGED
+            event_seq = add_sync_event(
+                conn,
+                owner_did,
+                event_type,
+                {"group_did": group_did, "member_did": did, "membership_status": "left"},
+            )
             member_events.append((owner_did, event_seq, event_type))
     for owner_did, event_seq, event_type in member_events:
         _publish_realtime(
             request,
             owner_did,
             "group.state_changed",
-            {"group_did": group_did, "change": "member_left", "member_did": did},
+            _group_state_realtime_params(
+                owner_did=owner_did,
+                group_did=group_did,
+                change="member_left",
+                member_did=did,
+                membership_status="left",
+                event_seq=event_seq,
+                operation_id=params.get("operation_id"),
+            ),
             {"owner_did": owner_did, "event_type": event_type, "event_seq": str(event_seq)},
         )
     return {"left": True, "group_did": group_did}
@@ -870,7 +1061,7 @@ def group_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
             event_seq = add_sync_event(
                 conn,
                 member_row["member_did"],
-                "group.message.created",
+                SYNC_EVENT_MESSAGE_CREATED,
                 {"message_id": message_id, "group_did": group_did, "server_seq": seq},
             )
             member_events.append((str(member_row["member_did"]), event_seq))
@@ -879,20 +1070,20 @@ def group_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
             request,
             owner_did,
             "group.incoming",
-            {
-                "message": {
-                    "message_id": message_id,
-                    "group_did": group_did,
-                    "sender_did": sender,
-                    "content_type": content_type,
-                    "body": body,
-                    "server_seq": seq,
-                    "created_at": accepted_at,
-                }
-            },
+            _group_realtime_params(
+                message_id=message_id,
+                operation_id=params.get("operation_id") or meta.get("operation_id"),
+                sender=sender,
+                owner_did=owner_did,
+                group_did=group_did,
+                body=body,
+                content_type=content_type,
+                created_at=accepted_at,
+                server_seq=seq,
+            ),
             {
                 "owner_did": owner_did,
-                "event_type": "group.message.created",
+                "event_type": SYNC_EVENT_MESSAGE_CREATED,
                 "event_seq": str(event_seq),
                 "server_seq": str(seq),
             },
@@ -943,6 +1134,7 @@ def _group_message_result(row: Any) -> dict[str, Any]:
     body = _load(row["body_json"])
     content_type = row["content_type"] if "content_type" in row.keys() else (body.get("content_type", "text/plain") if isinstance(body, dict) else "text/plain")
     message_type, content = _project_message_content(body, content_type)
+    server_seq = str(row["server_seq"])
     return {
         **dict(row),
         "id": row["message_id"],
@@ -952,7 +1144,39 @@ def _group_message_result(row: Any) -> dict[str, Any]:
         "body": body,
         "sent_at": row["created_at"],
         "received_at": row["created_at"],
+        "group_event_seq": server_seq,
+        "group_state_version": server_seq,
         "direction": "incoming",
+    }
+
+
+def _group_membership_sync_event_from_payload(event_row: Any, payload: dict[str, Any], owner_did: str) -> dict[str, Any]:
+    group_did = str(payload.get("group_did") or "")
+    member_did = str(payload.get("member_did") or payload.get("subject_did") or "")
+    status = str(payload.get("membership_status") or "active")
+    group_event_seq = str(event_row["event_seq"])
+    return {
+        "event_id": event_row["event_id"],
+        "event_seq": str(event_row["event_seq"]),
+        "event_type": SYNC_EVENT_GROUP_MEMBER_CHANGED,
+        "aggregate_kind": "group",
+        "aggregate_id": group_did or event_row["event_id"],
+        "owner_subject_id": owner_did,
+        "created_at": event_row["created_at"],
+        "payload": {
+            "thread_kind": "group",
+            "thread": {"kind": "group", "group_did": group_did},
+            "group": {
+                "group_did": group_did,
+                "group_event_seq": group_event_seq,
+                "group_state_version": group_event_seq,
+            },
+            "membership": {
+                "actor_did": member_did,
+                "subject_did": member_did,
+                "status": status,
+            },
+        },
     }
 
 
@@ -1118,6 +1342,47 @@ def mark_read(params: dict[str, Any], request: Request) -> dict[str, Any]:
         "read_up_to_seq": saved_seq,
     }
 
+
+def _sync_delta_event_from_row(conn: Any, row: Any, owner_did: str, warnings: list[str]) -> dict[str, Any] | None:
+    event_type = str(row["event_type"])
+    payload = _load(row["payload_json"])
+    if not isinstance(payload, dict):
+        raise InvalidParams("sync.event_payload_not_object", data={"event_id": row["event_id"]})
+
+    if event_type in {SYNC_EVENT_MESSAGE_CREATED, LEGACY_DIRECT_MESSAGE_CREATED, LEGACY_GROUP_MESSAGE_CREATED}:
+        message_id = str(payload.get("message_id") or "")
+        if not message_id:
+            raise InvalidParams("sync.message_id_missing", data={"event_id": row["event_id"]})
+        if payload.get("group_did") or event_type == LEGACY_GROUP_MESSAGE_CREATED:
+            message_row = conn.execute(
+                "SELECT * FROM group_messages WHERE message_id = ?",
+                (message_id,),
+            ).fetchone()
+            if not message_row:
+                raise InvalidParams("sync.group_message_missing", data={"message_id": message_id})
+            return _group_sync_event_from_message(row, _group_message_result(message_row), owner_did)
+        message_row = conn.execute(
+            """
+            SELECT m.*, v.read_at AS read_at FROM direct_messages m
+            JOIN direct_message_views v ON v.message_id = m.message_id
+            WHERE v.owner_did = ? AND m.message_id = ?
+            """,
+            (owner_did, message_id),
+        ).fetchone()
+        if not message_row:
+            raise InvalidParams("sync.direct_message_missing", data={"message_id": message_id})
+        return _direct_sync_event_from_message(row, _direct_message_result(message_row, owner_did), owner_did)
+
+    if event_type == SYNC_EVENT_GROUP_MEMBER_CHANGED or event_type in LEGACY_GROUP_JOINED_EVENTS or event_type in LEGACY_GROUP_LEFT_EVENTS:
+        if event_type in LEGACY_GROUP_JOINED_EVENTS and "membership_status" not in payload:
+            payload = {**payload, "membership_status": "active"}
+        elif event_type in LEGACY_GROUP_LEFT_EVENTS and "membership_status" not in payload:
+            payload = {**payload, "membership_status": "left"}
+        return _group_membership_sync_event_from_payload(row, payload, owner_did)
+
+    raise InvalidParams("sync.unsupported_event_type", data={"event_type": event_type})
+
+
 def sync_delta(params: dict[str, Any], request: Request) -> dict[str, Any]:
     owner = current_did(request)
     user_did = params.get("user_did")
@@ -1127,6 +1392,8 @@ def sync_delta(params: dict[str, Any], request: Request) -> dict[str, Any]:
     limit = int(params.get("limit", 100))
     if limit > 500:
         raise InvalidParams("sync.limit_too_large")
+    events: list[dict[str, Any]] = []
+    warnings: list[str] = []
     with get_store(request).connect() as conn:
         rows = conn.execute(
             """
@@ -1137,24 +1404,11 @@ def sync_delta(params: dict[str, Any], request: Request) -> dict[str, Any]:
             """,
             (owner, after, limit),
         ).fetchall()
-    events = []
-    for row in rows:
-        payload = _load(row["payload_json"])
-        aggregate_id = payload.get("message_id") or payload.get("group_did") or payload.get("thread_id") or row["event_id"]
-        aggregate_kind = "group_message" if str(row["event_type"]).startswith("group.") else "direct_message"
-        if str(row["event_type"]).startswith("read_state."):
-            aggregate_kind = "read_state"
-        events.append(
-            {
-                **dict(row),
-                "event_seq": str(row["event_seq"]),
-                "owner_subject_id": row["owner_did"],
-                "aggregate_kind": aggregate_kind,
-                "aggregate_id": aggregate_id,
-                "payload": payload,
-            }
-        )
-    next_seq = events[-1]["event_seq"] if events else after
+        for row in rows:
+            event = _sync_delta_event_from_row(conn, row, owner, warnings)
+            if event is not None:
+                events.append(event)
+    next_seq = str(rows[-1]["event_seq"]) if rows else str(after)
     return {
         "owner_did": owner,
         "owner_subject_id": owner,
@@ -1163,7 +1417,7 @@ def sync_delta(params: dict[str, Any], request: Request) -> dict[str, Any]:
         "has_more": len(events) >= limit,
         "snapshot_required": False,
         "retention_floor_event_seq": "0",
-        "warnings": [],
+        "warnings": warnings,
     }
 
 

@@ -555,6 +555,43 @@ def public_profile(params: dict[str, Any], request: Request) -> dict[str, Any]:
         else:
             raise InvalidParams("did_or_handle_required")
     if not row:
+        if handle:
+            from awiki_open_server.user_compat.wns import resolve_handle_anywhere
+
+            resolution = resolve_handle_anywhere(str(handle), request)
+            return resolution.public_profile_view(settings)
+        if did:
+            from awiki_open_server.user_compat.wns import resolve_did_anywhere
+
+            resolved = resolve_did_anywhere(str(did), request)
+            display_name = str(resolved["did"]).split(":")[-1]
+            domain = str(resolved["did"]).split(":")[2] if str(resolved["did"]).startswith("did:wba:") else None
+            return {
+                "did": resolved["did"],
+                "user_id": resolved["did"],
+                "user_name": display_name,
+                "nick_name": display_name,
+                "nickName": display_name,
+                "display_name": display_name,
+                "avatar_url": None,
+                "avatarUrl": None,
+                "avatar_uri": None,
+                "bio": None,
+                "description": None,
+                "profile_md": None,
+                "profile_url": None,
+                "profileUrl": None,
+                "profile_uri": None,
+                "handle": None,
+                "domain": domain,
+                "subject_type": "unknown",
+                "status": "active",
+                "service_endpoints": resolved["service_endpoints"],
+                "did_document": resolved["document"],
+                "verification_level": resolved["verification_level"],
+                "resolver_source": resolved["resolver_source"],
+                "warnings": resolved["warnings"],
+            }
         raise NotFound("profile_not_found")
     profile = dict(row)
     with get_store(request).connect() as conn:
@@ -765,7 +802,9 @@ def users_get_by_handle(params: dict[str, Any], request: Request) -> dict[str, A
     with get_store(request).connect() as conn:
         row = conn.execute("SELECT * FROM profiles WHERE handle = ?", (stored_handle,)).fetchone()
     if not row:
-        raise NotFound("handle_not_found")
+        from awiki_open_server.user_compat.wns import resolve_handle_anywhere
+
+        return resolve_handle_anywhere(str(handle), request).public_profile_view(settings)
     return _users_profile_view(dict(row), request)
 
 
@@ -773,17 +812,17 @@ def resolve_profile(params: dict[str, Any], request: Request) -> dict[str, Any]:
     did = params.get("did")
     if not did:
         raise InvalidParams("did_required")
-    with get_store(request).connect() as conn:
-        row = conn.execute(
-            """
-            SELECT document_json FROM did_documents
-            WHERE did = ? AND COALESCE(status, 'active') = 'active' AND revoked_at IS NULL
-            """,
-            (did,),
-        ).fetchone()
-    if not row:
-        raise NotFound("did_document_not_found")
-    return {"did": did, "document": _load(row["document_json"])}
+    from awiki_open_server.user_compat.wns import resolve_did_anywhere
+
+    resolved = resolve_did_anywhere(str(did), request)
+    return {
+        "did": resolved["did"],
+        "document": resolved["document"],
+        "service_endpoints": resolved["service_endpoints"],
+        "verification_level": resolved["verification_level"],
+        "resolver_source": resolved["resolver_source"],
+        "warnings": resolved["warnings"],
+    }
 
 
 def _split_handle(handle: str, default_domain: str) -> tuple[str, str, str, str]:
@@ -838,6 +877,10 @@ def handle_lookup(params: dict[str, Any], request: Request) -> dict[str, Any]:
         else:
             raise InvalidParams("did_or_handle_required")
     if not row:
+        if handle:
+            from awiki_open_server.user_compat.wns import resolve_handle_anywhere
+
+            return resolve_handle_anywhere(str(handle), request).lookup_view()
         raise NotFound("handle_not_found")
     profile = dict(row)
     local, domain, _, full = _split_handle(profile["handle"], settings.did_domain)

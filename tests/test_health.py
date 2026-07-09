@@ -130,9 +130,14 @@ def test_im_websocket_receives_direct_and_group_notifications(tmp_path):
             ).json()["result"]
             direct_notification = websocket.receive_json()
             assert direct_notification["method"] == "direct.incoming"
-            assert direct_notification["params"]["message"]["message_id"] == sent["message_id"]
-            assert direct_notification["params"]["message"]["body"]["text"] == "hello over ws"
-            assert direct_notification["sync"]["event_type"] == "direct.message.created"
+            assert direct_notification["params"]["meta"]["profile"] == "anp.direct.base.v1"
+            assert direct_notification["params"]["meta"]["security_profile"] == "transport-protected"
+            assert direct_notification["params"]["meta"]["message_id"] == sent["message_id"]
+            assert direct_notification["params"]["meta"]["sender_did"] == alice["did"]
+            assert direct_notification["params"]["meta"]["target"]["kind"] == "agent"
+            assert direct_notification["params"]["meta"]["target"]["did"] == bob["did"]
+            assert direct_notification["params"]["body"]["text"] == "hello over ws"
+            assert direct_notification["sync"]["event_type"] == "message.created"
 
             group_did = "did:wba:testserver:groups:open"
             client.post(
@@ -147,8 +152,15 @@ def test_im_websocket_receives_direct_and_group_notifications(tmp_path):
             )
             state_notification = websocket.receive_json()
             assert state_notification["method"] == "group.state_changed"
-            assert state_notification["params"]["change"] == "member_joined"
-            assert state_notification["params"]["group_did"] == group_did
+            assert state_notification["params"]["meta"]["profile"] == "anp.group.base.v1"
+            assert state_notification["params"]["meta"]["security_profile"] == "transport-protected"
+            assert state_notification["params"]["meta"]["sender_did"] == group_did
+            assert state_notification["params"]["meta"]["target"]["kind"] == "agent"
+            assert state_notification["params"]["meta"]["target"]["did"] == bob["did"]
+            assert state_notification["params"]["body"]["change"] == "member_joined"
+            assert state_notification["params"]["body"]["event_type"] == "member-activated"
+            assert state_notification["params"]["body"]["group_did"] == group_did
+            assert state_notification["params"]["body"]["subject_method"] == "group.join"
 
             group_msg = client.post(
                 "/im/rpc",
@@ -162,6 +174,14 @@ def test_im_websocket_receives_direct_and_group_notifications(tmp_path):
             ).json()["result"]
             group_notification = websocket.receive_json()
             assert group_notification["method"] == "group.incoming"
-            assert group_notification["params"]["message"]["message_id"] == group_msg["message_id"]
-            assert group_notification["params"]["message"]["body"]["text"] == "group over ws"
-            assert group_notification["sync"]["event_type"] == "group.message.created"
+            assert group_notification["params"]["meta"]["profile"] == "anp.group.base.v1"
+            assert group_notification["params"]["meta"]["security_profile"] == "transport-protected"
+            assert group_notification["params"]["meta"]["message_id"] == group_msg["message_id"]
+            assert group_notification["params"]["meta"]["sender_did"] == bob["did"]
+            assert group_notification["params"]["meta"]["target"]["kind"] == "agent"
+            assert group_notification["params"]["meta"]["target"]["did"] == bob["did"]
+            assert group_notification["params"]["body"]["text"] == "group over ws"
+            assert group_notification["params"]["body"]["group_did"] == group_did
+            assert group_notification["params"]["body"]["group_event_seq"] == str(group_msg["server_seq"])
+            assert group_notification["params"]["body"]["accepted_at"] == group_msg["accepted_at"]
+            assert group_notification["sync"]["event_type"] == "message.created"

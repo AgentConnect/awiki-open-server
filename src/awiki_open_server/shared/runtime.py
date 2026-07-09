@@ -9,6 +9,7 @@ from fastapi import Request
 
 from awiki_open_server.app.settings import Settings
 from awiki_open_server.service_identity import require_signed_peer_request, verify_peer_http_signature
+from awiki_open_server.shared.http_client import OutboundHttpPolicy, allowed_hosts_from_base_urls, http_get_json_limited
 from awiki_open_server.shared.errors import InvalidParams, NotFound, Unauthorized
 from awiki_open_server.shared.ids import now_iso, new_id
 from awiki_open_server.user_compat.core import get_settings, get_store
@@ -54,12 +55,25 @@ def _did_document_url(did: str, resolver_base_urls: dict[str, str] | None = None
     return f"https://{domain}/{path}/did.json"
 
 
-def _http_get_json(url: str) -> dict[str, Any]:
-    with urllib.request.urlopen(url, timeout=15) as response:
-        data = json.loads(response.read().decode())
-    if not isinstance(data, dict):
-        raise InvalidParams("did_document_must_be_object")
-    return data
+def _http_get_json(url: str, policy: OutboundHttpPolicy | None = None) -> dict[str, Any]:
+    return http_get_json_limited(
+        url,
+        256 * 1024,
+        policy=policy or OutboundHttpPolicy(timeout_seconds=15, not_found_message="did_document_not_found"),
+    )
+
+
+def _http_get_json_for_settings(url: str, settings: Settings) -> dict[str, Any]:
+    policy = OutboundHttpPolicy(
+        allowed_http_hosts=allowed_hosts_from_base_urls(settings.did_resolver_base_urls, settings.wns_resolver_base_urls),
+        timeout_seconds=15,
+        not_found_message="did_document_not_found",
+    )
+    try:
+        return _http_get_json(url, policy)
+    except TypeError:
+        # Tests and downstream adapters may monkeypatch the legacy one-argument helper.
+        return _http_get_json(url)  # type: ignore[call-arg]
 
 
 def _http_post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None, body_bytes: bytes | None = None) -> dict[str, Any]:
@@ -99,7 +113,7 @@ def _anp_message_service(document: dict[str, Any]) -> dict[str, Any]:
 
 def _discover_anp_service(did: str, settings: Settings) -> dict[str, Any]:
     try:
-        document = _http_get_json(_did_document_url(did, settings.did_resolver_base_urls))
+        document = _http_get_json_for_settings(_did_document_url(did, settings.did_resolver_base_urls), settings)
     except Exception as exc:
         if isinstance(exc, (InvalidParams, NotFound)):
             raise
@@ -139,7 +153,8 @@ def _resolve_did_document_for_proof(request: Request, did: str) -> dict[str, Any
             raise InvalidParams("did_document_must_be_object")
         return document
     try:
-        document = _http_get_json(_did_document_url(did, get_settings(request).did_resolver_base_urls))
+        settings = get_settings(request)
+        document = _http_get_json_for_settings(_did_document_url(did, settings.did_resolver_base_urls), settings)
     except Exception as exc:
         if isinstance(exc, InvalidParams):
             raise
@@ -164,7 +179,7 @@ def _verify_peer_request_signature(request: Request, settings: Settings) -> None
     service_did = _source_service_did(headers)
     if not service_did:
         raise Unauthorized("missing_source_service_did")
-    document = _http_get_json(_did_document_url(service_did, settings.did_resolver_base_urls))
+    document = _http_get_json_for_settings(_did_document_url(service_did, settings.did_resolver_base_urls), settings)
     if document.get("id") != service_did:
         raise Unauthorized("source_service_did_document_mismatch")
     public_url = f"{settings.public_base_url.rstrip('/')}{request.url.path}"

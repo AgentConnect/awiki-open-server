@@ -66,7 +66,13 @@ async def test_direct_group_participant_and_public_surface(client):
     assert history["result"]["messages"][0]["receiver_did"] == bob_did
 
     delta = await rpc(client, "/im/rpc", "sync.delta", {"after_event_seq": 0}, token=bob_token)
-    assert delta["result"]["events"][0]["event_type"] == "direct.message.created"
+    event = delta["result"]["events"][0]
+    assert event["event_type"] == "message.created"
+    assert event["payload"]["thread"] == {"kind": "direct", "peer_did": alice_did}
+    assert event["payload"]["message"]["id"] == sent["result"]["message_id"]
+    assert event["payload"]["message"]["sender_did"] == alice_did
+    assert event["payload"]["message"]["receiver_did"] == bob_did
+    assert event["payload"]["message"]["content"] == "hi"
 
     thread = await rpc(client, "/im/rpc", "sync.thread_after", {"thread_id": f"direct:{alice_did}", "after_server_seq": 0}, token=bob_token)
     assert thread["result"]["messages"][0]["message_id"] == sent["result"]["message_id"]

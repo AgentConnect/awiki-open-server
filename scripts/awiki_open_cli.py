@@ -262,6 +262,7 @@ def start_open_server(
             "AWIKI_SERVICE_PRIVATE_KEY_PEM": private_key_pem.replace("\n", "\\n"),
             "AWIKI_ALLOW_UNSIGNED_PEER_DEV": "0",
             "AWIKI_DID_RESOLVER_BASE_URLS": json.dumps(resolver_map),
+            "AWIKI_WNS_RESOLVER_BASE_URLS": json.dumps(resolver_map),
         }
     )
     return subprocess.Popen(

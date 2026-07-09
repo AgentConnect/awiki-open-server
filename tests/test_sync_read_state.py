@@ -44,8 +44,14 @@ async def test_sync_delta_thread_after_and_read_state_standard_shapes(client):
     assert result["snapshot_required"] is False
     assert result["warnings"] == []
     assert result["events"][0]["event_seq"] == "1"
+    assert result["events"][0]["event_type"] == "message.created"
     assert result["events"][0]["owner_subject_id"] == bob
     assert result["events"][0]["aggregate_kind"] == "direct_message"
+    assert result["events"][0]["payload"]["thread"] == {"kind": "direct", "peer_did": alice}
+    assert result["events"][0]["payload"]["message"]["id"] == message_id
+    assert result["events"][0]["payload"]["message"]["sender_did"] == alice
+    assert result["events"][0]["payload"]["message"]["receiver_did"] == bob
+    assert result["events"][0]["payload"]["message"]["content"] == "sync hello"
 
     thread = await rpc(
         client,
@@ -133,4 +139,3 @@ async def test_sync_delta_thread_after_and_read_state_standard_shapes(client):
         token=bob_token,
     )
     assert bad_read["error"]["message"] == "read_state.server_seq_invalid"
-
