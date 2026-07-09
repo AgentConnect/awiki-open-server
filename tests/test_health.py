@@ -61,6 +61,37 @@ def test_im_websocket_accepts_ws_ticket(tmp_path):
     assert notification["params"]["owner_did"] == registered["did"]
 
 
+def test_im_websocket_accepts_bearer_authorization(tmp_path):
+    app = create_app(
+        Settings(
+            data_dir=tmp_path,
+            public_base_url="http://testserver",
+            service_did="did:wba:testserver",
+            did_domain="testserver",
+            service_private_key_pem=generate_ed25519_private_key_pem(),
+            allow_unsigned_peer_dev=True,
+        )
+    )
+    with TestClient(app) as client:
+        registered = client.post(
+            "/did-auth/rpc",
+            json={
+                "jsonrpc": "2.0",
+                "method": "register",
+                "params": {"handle": "ws-bearer"},
+                "id": "1",
+            },
+        ).json()["result"]
+        with client.websocket_connect(
+            "/im/ws",
+            headers={"Authorization": f"Bearer {registered['token']}"},
+        ) as websocket:
+            notification = websocket.receive_json()
+
+    assert notification["method"] == "sync"
+    assert notification["params"]["owner_did"] == registered["did"]
+
+
 def test_im_websocket_receives_direct_and_group_notifications(tmp_path):
     app = create_app(
         Settings(

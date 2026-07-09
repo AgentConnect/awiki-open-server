@@ -14,6 +14,7 @@ from awiki_open_server.services import (
     MESSAGE_HANDLERS,
     SITE_HANDLERS,
     attachment_ticket,
+    bearer_token,
     content_get,
     did_for_token,
     get_store,
@@ -254,7 +255,11 @@ def mount_routes(app: FastAPI) -> None:
         return await user_compat_ws_ticket_verify(request, ticket=ticket, token=token)
 
     async def im_ws(websocket: WebSocket):
-        token = websocket.query_params.get("token") or websocket.query_params.get("ticket")
+        token = (
+            websocket.query_params.get("token")
+            or websocket.query_params.get("ticket")
+            or bearer_token(websocket)
+        )
         did = did_for_token(websocket, token) if token else None
         if not did:
             await websocket.close(code=4401)
