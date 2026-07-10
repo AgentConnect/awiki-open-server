@@ -12,7 +12,7 @@ Step index：02
 | Branch | `main` |
 | Started | 2026-07-10T10:58:33Z |
 | Completed | 2026-07-10T11:07:17Z |
-| Commit | 待提交：`messaging: harden protocol errors and idempotency` |
+| Commit | `a8b2e3c` (`messaging: harden protocol errors and idempotency`) |
 | Review evidence | direct/group 幂等边界、冲突错误、ANP profile/security 校验、JSON-RPC 兼容、public allowlist、SQLite 兼容迁移已复核；剩余风险为未新增 `operation_id` 唯一索引，继续依赖 `message_id` 主键和运行时冲突判定。 |
 | Verification evidence | focused idempotency/meta tests 4 passed；Step gate 25 passed；protocol SDK 9 passed；local cross-domain smoke pass；full local tests 66 passed, 2 skipped；`git diff --check` pass。 |
 | Next action | 启动 Step 03 附件生命周期与安全补齐 |
@@ -133,7 +133,7 @@ Step index：02
 - Commit 时机：实现、验证、Review 完成后。
 - Commit 范围：只包含协议/错误/幂等性相关代码、tests、必要 docs。
 - Commit 前状态：`## main...origin/main [ahead 1]`，修改 `plan/20260710-open-server-next-functions-review/plan.md`、`plan/20260710-open-server-next-functions-review/steps/02-protocol-error-idempotency-hardening.md`、`src/awiki_open_server/messaging/core.py`、`src/awiki_open_server/storage/db.py`、`tests/test_direct_messages.py`、`tests/test_group_participant.py`。
-- Commit 后证据：提交后回填 commit hash 和 commit 后状态。
+- Commit 后证据：功能提交 `a8b2e3c`；提交后 `git status --short --branch` 为 `## main...origin/main [ahead 2]`，工作区 clean。
 - 建议消息：`messaging: harden protocol errors and idempotency`。
 
 ## 11. Blocked 处理
