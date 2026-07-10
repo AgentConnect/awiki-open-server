@@ -22,6 +22,75 @@ _require_meta_string = runtime._require_meta_string
 _verify_peer_request_signature = runtime._verify_peer_request_signature
 
 
+def _parse_iso_time(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _is_expired(value: Any) -> bool:
+    parsed = _parse_iso_time(value)
+    return parsed is not None and parsed <= datetime.now(timezone.utc)
+
+
+def _normalize_mime_type(value: Any) -> str:
+    return str(value or "application/octet-stream").split(";", 1)[0].strip().lower() or "application/octet-stream"
+
+
+def _parse_expected_size(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise InvalidParams("attachment_expected_size_invalid") from exc
+    if parsed < 0:
+        raise InvalidParams("attachment_expected_size_invalid")
+    return parsed
+
+
+def _parse_expected_sha256(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    raw: Any
+    if isinstance(value, dict):
+        alg = str(value.get("alg") or "sha-256").strip().lower()
+        if alg not in {"sha-256", "sha256"}:
+            raise InvalidParams("attachment_digest_alg_not_supported", data={"alg": alg})
+        raw = value.get("value_hex") or value.get("sha256") or value.get("value")
+    else:
+        raw = value
+    digest = str(raw or "").strip().lower()
+    for prefix in ("sha-256:", "sha-256=", "sha256:", "sha256="):
+        if digest.startswith(prefix):
+            digest = digest.split(prefix, 1)[1].strip()
+            break
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        raise InvalidParams("attachment_expected_digest_invalid")
+    return digest
+
+
+def _expected_sha256_from_params(params: dict[str, Any]) -> str | None:
+    raw = params.get("expected_digest")
+    if raw is None:
+        raw = params.get("digest")
+    if raw is None:
+        raw = params.get("expected_sha256")
+    return _parse_expected_sha256(raw)
+
+
+def _ensure_mime_allowed(settings: Settings, content_type: str) -> None:
+    if content_type not in settings.attachment_allowed_mime_types:
+        raise InvalidParams("attachment_content_type_not_allowed", data={"content_type": content_type})
+
+
+def _slot_expiry() -> str:
+    return (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+
+
 def attachment_create_slot(params: dict[str, Any], request: Request) -> dict[str, Any]:
     owner = current_did(request)
     encryption_info = params.get("encryption_info") if isinstance(params.get("encryption_info"), dict) else {}
@@ -38,13 +107,41 @@ def attachment_create_slot(params: dict[str, Any], request: Request) -> dict[str
     path = settings.object_dir / f"{object_id}.upload"
     upload_uri = _object_upload_uri(settings, slot_id)
     object_uri = _object_download_uri(settings, object_id)
-    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+    expected_size = _parse_expected_size(params.get("expected_size", params.get("size")))
+    expected_sha256 = _expected_sha256_from_params(params)
+    raw_content_type = params.get("expected_content_type") or params.get("content_type") or params.get("mime_type")
+    expected_content_type = _normalize_mime_type(raw_content_type) if raw_content_type else None
+    if expected_size is not None and expected_size > settings.max_attachment_bytes:
+        raise InvalidParams("attachment_too_large", data={"max": settings.max_attachment_bytes, "actual": expected_size})
+    if expected_content_type:
+        _ensure_mime_allowed(settings, expected_content_type)
+    expires_at = _slot_expiry()
     with get_store(request).connect() as conn:
         conn.execute(
-            "INSERT INTO attachment_slots(slot_id, object_id, attachment_id, object_uri, owner_did, upload_token, commit_token, path, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (slot_id, object_id, attachment_id, object_uri, owner, upload_token, commit_token, str(path), "open", now_iso()),
+            """
+            INSERT INTO attachment_slots(
+              slot_id, object_id, attachment_id, object_uri, owner_did, upload_token, commit_token, path, status,
+              expected_size, expected_sha256, expected_content_type, expires_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                slot_id,
+                object_id,
+                attachment_id,
+                object_uri,
+                owner,
+                upload_token,
+                commit_token,
+                str(path),
+                "open",
+                expected_size,
+                expected_sha256,
+                expected_content_type,
+                expires_at,
+                now_iso(),
+            ),
         )
-    return {
+    result = {
         "attachment_id": attachment_id,
         "slot_id": slot_id,
         "object_id": object_id,
@@ -56,13 +153,27 @@ def attachment_create_slot(params: dict[str, Any], request: Request) -> dict[str
         "object_uri": object_uri,
         "expires_at": expires_at,
     }
+    if expected_size is not None:
+        result["expected_size"] = expected_size
+    if expected_sha256 is not None:
+        result["expected_digest"] = {"alg": "sha-256", "value_hex": expected_sha256}
+    if expected_content_type is not None:
+        result["content_type"] = expected_content_type
+    return result
 
 
 async def upload_slot(slot_id: str, token: str, data: bytes, request: Request) -> dict[str, Any]:
+    settings = get_settings(request)
     with get_store(request).connect() as conn:
         row = conn.execute("SELECT * FROM attachment_slots WHERE slot_id = ? AND upload_token = ?", (slot_id, token)).fetchone()
         if not row:
             raise NotFound("slot_not_found")
+        if row["status"] not in {"open", "uploaded"}:
+            raise InvalidParams("slot_not_uploadable", data={"status": row["status"]})
+        if _is_expired(row["expires_at"]):
+            raise InvalidParams("slot_expired")
+        if len(data) > settings.max_attachment_bytes:
+            raise InvalidParams("attachment_too_large", data={"max": settings.max_attachment_bytes, "actual": len(data)})
         path = Path(row["path"])
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
@@ -83,18 +194,37 @@ def attachment_commit(params: dict[str, Any], request: Request) -> dict[str, Any
         ).fetchone()
         if not row:
             raise NotFound("slot_not_found")
+        if row["status"] != "uploaded":
+            raise InvalidParams("object_not_uploaded")
+        if _is_expired(row["expires_at"]):
+            raise InvalidParams("slot_expired")
         path = Path(row["path"])
         if not path.exists():
             raise InvalidParams("object_not_uploaded")
         data = path.read_bytes()
+        settings = get_settings(request)
+        if len(data) > settings.max_attachment_bytes:
+            raise InvalidParams("attachment_too_large", data={"max": settings.max_attachment_bytes, "actual": len(data)})
+        if row["expected_size"] is not None and int(row["expected_size"]) != len(data):
+            raise InvalidParams("attachment_size_mismatch", data={"expected": int(row["expected_size"]), "actual": len(data)})
         digest = hashlib.sha256(data).hexdigest()
+        if row["expected_sha256"] and str(row["expected_sha256"]).lower() != digest:
+            raise InvalidParams("attachment_digest_mismatch", data={"expected": row["expected_sha256"], "actual": digest})
+        content_type = _normalize_mime_type(params.get("content_type") or row["expected_content_type"] or "application/octet-stream")
+        _ensure_mime_allowed(settings, content_type)
+        if row["expected_content_type"] and content_type != row["expected_content_type"]:
+            raise InvalidParams("attachment_content_type_mismatch", data={"expected": row["expected_content_type"], "actual": content_type})
         final = path.with_suffix(".bin")
         shutil.move(str(path), str(final))
         object_uri = row["object_uri"] or _object_download_uri(get_settings(request), str(row["object_id"]))
         attachment_id = row["attachment_id"] or params.get("attachment_id")
         conn.execute(
-            "INSERT INTO attachment_objects(object_id, source_attachment_id, object_uri, owner_did, path, size, sha256, content_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (row["object_id"], attachment_id, object_uri, row["owner_did"], str(final), len(data), digest, params.get("content_type", "application/octet-stream"), now_iso()),
+            """
+            INSERT INTO attachment_objects(
+              object_id, source_attachment_id, object_uri, owner_did, path, size, sha256, content_type, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (row["object_id"], attachment_id, object_uri, row["owner_did"], str(final), len(data), digest, content_type, now_iso()),
         )
         conn.execute("UPDATE attachment_slots SET status = ? WHERE slot_id = ?", ("committed", slot_id))
     committed_at = now_iso()
@@ -108,6 +238,7 @@ def attachment_commit(params: dict[str, Any], request: Request) -> dict[str, Any
         "size": len(data),
         "sha256": digest,
         "digest": {"alg": "sha-256", "value_hex": digest},
+        "content_type": content_type,
     }
 
 
@@ -125,6 +256,29 @@ def attachment_abort(params: dict[str, Any], request: Request) -> dict[str, Any]
             path.unlink()
         conn.execute("UPDATE attachment_slots SET status = ? WHERE slot_id = ?", ("aborted", slot_id))
     return {"aborted": True, "attachment_id": params.get("attachment_id"), "slot_id": slot_id, "aborted_at": now_iso()}
+
+
+def cleanup_expired_attachments(store: Any, *, now: str | None = None) -> dict[str, int]:
+    now_value = now or now_iso()
+    removed_slots = 0
+    removed_tickets = 0
+    with store.connect() as conn:
+        slots = conn.execute(
+            """
+            SELECT slot_id, path FROM attachment_slots
+            WHERE expires_at IS NOT NULL AND expires_at <= ? AND status != 'committed'
+            """,
+            (now_value,),
+        ).fetchall()
+        for row in slots:
+            path = Path(row["path"])
+            if path.exists():
+                path.unlink()
+            conn.execute("DELETE FROM attachment_slots WHERE slot_id = ?", (row["slot_id"],))
+            removed_slots += 1
+        cursor = conn.execute("DELETE FROM download_tickets WHERE expires_at <= ?", (now_value,))
+        removed_tickets = cursor.rowcount if cursor.rowcount is not None else 0
+    return {"expired_slots": removed_slots, "expired_download_tickets": removed_tickets}
 
 
 def _object_id_from_uri(object_uri: Any) -> str | None:

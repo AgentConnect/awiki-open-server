@@ -22,6 +22,7 @@ from awiki_open_server.services import (
     upload_slot,
 )
 from awiki_open_server.shared.errors import AwikiError, InvalidParams, NotFound, Unauthorized
+from awiki_open_server.shared.ids import now_iso
 from awiki_open_server.shared.jsonrpc import dispatch
 from awiki_open_server.user_compat import (
     AGENT_INVENTORY_HANDLERS,
@@ -336,7 +337,10 @@ def mount_routes(app: FastAPI) -> None:
         upload_token = token or request.headers.get("X-ANP-Upload-Token") or request.headers.get("x-anp-upload-token")
         if not upload_token:
             raise HTTPException(status_code=401, detail="missing_upload_token")
-        return await upload_slot(slot_id, upload_token, await request.body(), request)
+        try:
+            return await upload_slot(slot_id, upload_token, await request.body(), request)
+        except Exception as exc:
+            raise _http_error(exc) from exc
     app.add_api_route(f"{settings.object_upload_path}/{{slot_id}}", upload_object, methods=["PUT"])
 
     async def download_object(object_id: str, request: Request, ticket: str | None = None):
@@ -351,9 +355,9 @@ def mount_routes(app: FastAPI) -> None:
                 """
                 SELECT o.path, o.content_type FROM attachment_objects o
                 JOIN download_tickets t ON t.object_id = o.object_id
-                WHERE o.object_id = ? AND t.ticket = ?
+                WHERE o.object_id = ? AND t.ticket = ? AND t.expires_at > ?
                 """,
-                (object_id, download_ticket),
+                (object_id, download_ticket, now_iso()),
             ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="object_not_found")

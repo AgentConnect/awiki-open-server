@@ -8,6 +8,18 @@ import json
 from awiki_open_server.service_identity import load_private_key_setting
 
 
+DEFAULT_ATTACHMENT_MIME_TYPES = (
+    "application/anp-attachment-manifest+json",
+    "application/json",
+    "application/octet-stream",
+    "application/pdf",
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "text/plain",
+)
+
+
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
@@ -22,6 +34,8 @@ class Settings:
     ws_path: str = "/im/ws"
     object_upload_path: str = "/objects/upload"
     object_download_path: str = "/objects"
+    max_attachment_bytes: int = 10 * 1024 * 1024
+    attachment_allowed_mime_types: tuple[str, ...] = DEFAULT_ATTACHMENT_MIME_TYPES
     did_resolver_base_urls: dict[str, str] | None = None
     did_verify_dev_code: str = "666666"
     enable_contact_verification_compat: bool = False
@@ -33,6 +47,12 @@ class Settings:
         object.__setattr__(self, "ws_path", _normalize_route_path(self.ws_path))
         object.__setattr__(self, "object_upload_path", _normalize_route_path(self.object_upload_path))
         object.__setattr__(self, "object_download_path", _normalize_route_path(self.object_download_path))
+        object.__setattr__(self, "max_attachment_bytes", max(1, int(self.max_attachment_bytes)))
+        object.__setattr__(
+            self,
+            "attachment_allowed_mime_types",
+            tuple(sorted({_normalize_mime_type(value) for value in self.attachment_allowed_mime_types if str(value).strip()})),
+        )
 
     @property
     def db_path(self) -> Path:
@@ -70,6 +90,8 @@ def load_settings() -> Settings:
         ws_path=os.environ.get("AWIKI_WS_PATH", "/im/ws"),
         object_upload_path=os.environ.get("AWIKI_OBJECT_UPLOAD_PATH", "/objects/upload"),
         object_download_path=os.environ.get("AWIKI_OBJECT_DOWNLOAD_PATH", "/objects"),
+        max_attachment_bytes=int(os.environ.get("AWIKI_MAX_ATTACHMENT_BYTES", str(10 * 1024 * 1024))),
+        attachment_allowed_mime_types=_load_mime_types(os.environ.get("AWIKI_ATTACHMENT_ALLOWED_MIME_TYPES")),
         did_resolver_base_urls=resolver_base_urls,
         did_verify_dev_code=os.environ.get("AWIKI_DID_VERIFY_DEV_CODE") or os.environ.get("DEV_BYPASS_CODE") or "666666",
         enable_contact_verification_compat=os.environ.get("AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT", "").lower() in {"1", "true", "yes"},
@@ -86,6 +108,16 @@ def _normalize_route_path(path: str) -> str:
     while len(normalized) > 1 and normalized.endswith("/"):
         normalized = normalized[:-1]
     return normalized
+
+
+def _normalize_mime_type(value: str) -> str:
+    return str(value or "").split(";", 1)[0].strip().lower()
+
+
+def _load_mime_types(raw: str | None) -> tuple[str, ...]:
+    if not raw:
+        return DEFAULT_ATTACHMENT_MIME_TYPES
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
 def _load_resolver_base_urls(raw: str | None) -> dict[str, str] | None:

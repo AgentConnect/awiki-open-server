@@ -140,6 +140,10 @@ CREATE TABLE IF NOT EXISTS attachment_slots (
   commit_token TEXT NOT NULL,
   path TEXT NOT NULL,
   status TEXT NOT NULL,
+  expected_size INTEGER,
+  expected_sha256 TEXT,
+  expected_content_type TEXT,
+  expires_at TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -213,6 +217,10 @@ class Store:
             self.ensure_column(conn, "group_messages", "operation_id", "TEXT")
             self.ensure_column(conn, "attachment_slots", "attachment_id", "TEXT")
             self.ensure_column(conn, "attachment_slots", "object_uri", "TEXT")
+            self.ensure_column(conn, "attachment_slots", "expected_size", "INTEGER")
+            self.ensure_column(conn, "attachment_slots", "expected_sha256", "TEXT")
+            self.ensure_column(conn, "attachment_slots", "expected_content_type", "TEXT")
+            self.ensure_column(conn, "attachment_slots", "expires_at", "TEXT")
             self.ensure_column(conn, "attachment_objects", "source_attachment_id", "TEXT")
             self.ensure_column(conn, "attachment_objects", "object_uri", "TEXT")
             self.ensure_column(conn, "users", "revoked_at", "TEXT")

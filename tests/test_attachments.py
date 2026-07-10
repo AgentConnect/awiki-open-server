@@ -1,24 +1,18 @@
 from __future__ import annotations
 
-import json
+import hashlib
 
 import httpx
 import pytest
-from cryptography.hazmat.primitives.asymmetric import ed25519
 
-import awiki_open_server.messaging.core as messaging_services
-import awiki_open_server.shared.runtime as runtime
+from awiki_open_server.attachments.core import cleanup_expired_attachments
 from awiki_open_server.app.main import create_app
 from awiki_open_server.app.settings import Settings
 from awiki_open_server.service_identity import (
-    build_service_did_document,
     generate_ed25519_private_key_pem,
-    service_identity_from_settings,
-    verify_peer_http_signature,
 )
-from awiki_open_server.shared.errors import InvalidParams
 from tests.conftest import rpc
-from tests.helpers import did_keypair_document, origin_proof, register, register_with_key, remote_direct_result
+from tests.helpers import register
 
 @pytest.mark.asyncio
 async def test_attachment_roundtrip(client):
@@ -72,6 +66,178 @@ async def test_attachment_roundtrip(client):
 
     public_denied = await rpc(client, "/anp-im/rpc", "attachment.get_download_ticket", {"object_id": object_id})
     assert public_denied["error"]["message"] == "missing_requester_did"
+
+
+@pytest.mark.asyncio
+async def test_attachment_commit_validates_expected_metadata_and_mime(client):
+    _, token = await register(client, "att-meta")
+    data = b"verified attachment"
+    digest = hashlib.sha256(data).hexdigest()
+
+    slot = await rpc(
+        client,
+        "/im/rpc",
+        "attachment.create_slot",
+        {
+            "attachment_id": "att-meta-ok",
+            "expected_size": len(data),
+            "expected_digest": {"alg": "sha-256", "value_hex": digest},
+            "content_type": "text/plain",
+        },
+        token=token,
+    )
+    slot_result = slot["result"]
+    await client.put(f"/objects/upload/{slot_result['slot_id']}", headers=slot_result["upload_headers"], content=data)
+    committed = await rpc(
+        client,
+        "/im/rpc",
+        "attachment.commit_object",
+        {"slot_id": slot_result["slot_id"], "commit_token": slot_result["commit_token"]},
+        token=token,
+    )
+    assert committed["result"]["size"] == len(data)
+    assert committed["result"]["sha256"] == digest
+    assert committed["result"]["content_type"] == "text/plain"
+
+    size_slot = await rpc(client, "/im/rpc", "attachment.create_slot", {"expected_size": len(data) + 1}, token=token)
+    await client.put(f"/objects/upload/{size_slot['result']['slot_id']}", headers=size_slot["result"]["upload_headers"], content=data)
+    size_mismatch = await rpc(
+        client,
+        "/im/rpc",
+        "attachment.commit_object",
+        {"slot_id": size_slot["result"]["slot_id"], "commit_token": size_slot["result"]["commit_token"]},
+        token=token,
+    )
+    assert size_mismatch["error"]["message"] == "attachment_size_mismatch"
+    assert size_mismatch["error"]["data"] == {"expected": len(data) + 1, "actual": len(data)}
+
+    digest_slot = await rpc(
+        client,
+        "/im/rpc",
+        "attachment.create_slot",
+        {"expected_digest": {"alg": "sha-256", "value_hex": "0" * 64}},
+        token=token,
+    )
+    await client.put(f"/objects/upload/{digest_slot['result']['slot_id']}", headers=digest_slot["result"]["upload_headers"], content=data)
+    digest_mismatch = await rpc(
+        client,
+        "/im/rpc",
+        "attachment.commit_object",
+        {"slot_id": digest_slot["result"]["slot_id"], "commit_token": digest_slot["result"]["commit_token"]},
+        token=token,
+    )
+    assert digest_mismatch["error"]["message"] == "attachment_digest_mismatch"
+
+    mime_slot = await rpc(client, "/im/rpc", "attachment.create_slot", {"content_type": "text/plain"}, token=token)
+    await client.put(f"/objects/upload/{mime_slot['result']['slot_id']}", headers=mime_slot["result"]["upload_headers"], content=data)
+    mime_mismatch = await rpc(
+        client,
+        "/im/rpc",
+        "attachment.commit_object",
+        {"slot_id": mime_slot["result"]["slot_id"], "commit_token": mime_slot["result"]["commit_token"], "content_type": "application/json"},
+        token=token,
+    )
+    assert mime_mismatch["error"]["message"] == "attachment_content_type_mismatch"
+    assert mime_mismatch["error"]["data"] == {"expected": "text/plain", "actual": "application/json"}
+
+    disallowed_slot = await rpc(client, "/im/rpc", "attachment.create_slot", {}, token=token)
+    await client.put(f"/objects/upload/{disallowed_slot['result']['slot_id']}", headers=disallowed_slot["result"]["upload_headers"], content=data)
+    disallowed = await rpc(
+        client,
+        "/im/rpc",
+        "attachment.commit_object",
+        {
+            "slot_id": disallowed_slot["result"]["slot_id"],
+            "commit_token": disallowed_slot["result"]["commit_token"],
+            "content_type": "application/x-msdownload",
+        },
+        token=token,
+    )
+    assert disallowed["error"]["message"] == "attachment_content_type_not_allowed"
+
+
+@pytest.mark.asyncio
+async def test_attachment_expiry_quota_and_cleanup(tmp_path):
+    app = create_app(
+        Settings(
+            data_dir=tmp_path,
+            public_base_url="http://testserver",
+            service_did="did:wba:testserver",
+            did_domain="testserver",
+            service_private_key_pem=generate_ed25519_private_key_pem(),
+            allow_unsigned_peer_dev=True,
+            max_attachment_bytes=4,
+        )
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as limited_client:
+        _, token = await register(limited_client, "att-limit")
+
+        too_large_slot_request = await rpc(limited_client, "/im/rpc", "attachment.create_slot", {"expected_size": 5}, token=token)
+        assert too_large_slot_request["error"]["message"] == "attachment_too_large"
+
+        too_large_slot = await rpc(limited_client, "/im/rpc", "attachment.create_slot", {}, token=token)
+        too_large_upload = await limited_client.put(
+            f"/objects/upload/{too_large_slot['result']['slot_id']}",
+            headers=too_large_slot["result"]["upload_headers"],
+            content=b"12345",
+        )
+        assert too_large_upload.status_code == 400
+        assert too_large_upload.json()["detail"] == "attachment_too_large"
+
+        expired_slot = await rpc(limited_client, "/im/rpc", "attachment.create_slot", {}, token=token)
+        with app.state.store.connect() as conn:
+            conn.execute(
+                "UPDATE attachment_slots SET expires_at = ? WHERE slot_id = ?",
+                ("2000-01-01T00:00:00+00:00", expired_slot["result"]["slot_id"]),
+            )
+        expired_upload = await limited_client.put(
+            f"/objects/upload/{expired_slot['result']['slot_id']}",
+            headers=expired_slot["result"]["upload_headers"],
+            content=b"1234",
+        )
+        assert expired_upload.status_code == 400
+        assert expired_upload.json()["detail"] == "slot_expired"
+
+        expired_commit_slot = await rpc(limited_client, "/im/rpc", "attachment.create_slot", {}, token=token)
+        await limited_client.put(
+            f"/objects/upload/{expired_commit_slot['result']['slot_id']}",
+            headers=expired_commit_slot["result"]["upload_headers"],
+            content=b"1234",
+        )
+        with app.state.store.connect() as conn:
+            conn.execute(
+                "UPDATE attachment_slots SET expires_at = ? WHERE slot_id = ?",
+                ("2000-01-01T00:00:00+00:00", expired_commit_slot["result"]["slot_id"]),
+            )
+        expired_commit = await rpc(
+            limited_client,
+            "/im/rpc",
+            "attachment.commit_object",
+            {"slot_id": expired_commit_slot["result"]["slot_id"], "commit_token": expired_commit_slot["result"]["commit_token"]},
+            token=token,
+        )
+        assert expired_commit["error"]["message"] == "slot_expired"
+
+        slot = await rpc(limited_client, "/im/rpc", "attachment.create_slot", {"content_type": "text/plain"}, token=token)
+        await limited_client.put(f"/objects/upload/{slot['result']['slot_id']}", headers=slot["result"]["upload_headers"], content=b"1234")
+        committed = await rpc(
+            limited_client,
+            "/im/rpc",
+            "attachment.commit_object",
+            {"slot_id": slot["result"]["slot_id"], "commit_token": slot["result"]["commit_token"]},
+            token=token,
+        )
+        ticket = await rpc(limited_client, "/im/rpc", "attachment.get_download_ticket", {"object_id": committed["result"]["object_id"]}, token=token)
+        with app.state.store.connect() as conn:
+            conn.execute("UPDATE download_tickets SET expires_at = ? WHERE ticket = ?", ("2000-01-01T00:00:00+00:00", ticket["result"]["ticket"]))
+        expired_download = await limited_client.get(f"/objects/{committed['result']['object_id']}", params={"ticket": ticket["result"]["ticket"]})
+        assert expired_download.status_code == 404
+        assert expired_download.json()["detail"] == "object_not_found"
+
+    cleanup = cleanup_expired_attachments(app.state.store)
+    assert cleanup["expired_slots"] >= 2
+    assert cleanup["expired_download_tickets"] >= 1
 
 
 @pytest.mark.asyncio
@@ -255,4 +421,3 @@ async def test_attachment_abort(client):
     aborted = await rpc(client, "/im/rpc", "attachment.abort_object", {"slot_id": slot["result"]["slot_id"]}, token=token)
     assert aborted["result"]["aborted"] is True
     assert aborted["result"]["aborted_at"]
-

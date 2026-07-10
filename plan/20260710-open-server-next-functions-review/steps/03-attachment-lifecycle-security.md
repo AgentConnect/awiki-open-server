@@ -2,30 +2,30 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：03  
-状态：draft
+状态：done
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | pending |
-| Branch | 执行时填写 |
-| Started |  |
-| Completed |  |
-| Commit |  |
-| Review evidence |  |
-| Verification evidence |  |
-| Next action | 等 Step 02 完成后，补 attachment digest/expiry/quota tests |
+| Status | done |
+| Branch | `main` |
+| Started | 2026-07-10T11:09:52Z |
+| Completed | 2026-07-10T11:15:57Z |
+| Commit | 待提交：`attachments: enforce object lifecycle checks` |
+| Review evidence | slot expected metadata、upload/commit expiry、size/digest/MIME/max bytes、download ticket expiry、cleanup helper、HTTP 错误映射和 Community 非目标边界已复核；新增配置文档同步留给 Step 06。 |
+| Verification evidence | `tests/test_attachments.py` 6 passed；`tests/test_direct_messages.py tests/test_group_participant.py` 19 passed；`smoke-asgi --data-dir .awiki-open-server/attachment-asgi` pass；`tests -q` 68 passed, 2 skipped；`git diff --check` pass。 |
+| Next action | 启动 Step 04 DID/Auth 注册 proof 与 token 生命周期硬化 |
 | Assigned agent | agent-attachments |
 | Parallel group | 串行 |
 | Parallel safe | no |
 | Parallel with | 无 |
 | Conflict resources | `awiki-open-server/src/awiki_open_server/attachments/core.py`, `app/routes.py`, `storage/db.py` |
-| Baseline commit | 执行时填写 |
-| Worktree / branch | 执行时填写 |
+| Baseline commit | `459f17e` |
+| Worktree / branch | `main` |
 | Merge gate | Attachment lifecycle gate |
 | Verification gate | `tests/test_attachments.py` + full local tests |
-| Gate status | pending |
+| Gate status | pass |
 
 ## 2. 目标
 
@@ -88,15 +88,15 @@ Step index：03
 
 ## 7. 验收标准
 
-- [ ] `commit_object` 对 expected size mismatch 稳定失败。
-- [ ] `commit_object` 对 expected digest mismatch 稳定失败。
-- [ ] expired slot 不能 upload/commit。
-- [ ] expired download ticket 不能下载对象。
-- [ ] unauthorized requester 仍不能拿 ticket 或下载对象。
-- [ ] direct/group attachment manifest grant 仍通过现有 tests。
-- [ ] E2EE object encryption 仍返回 `not_supported` 或 policy violation。
-- [ ] 配置项如新增已同步 docs 或记录到 Step 06。
-- [ ] 本步骤在进入下一步之前已经创建聚焦 commit。
+- [x] `commit_object` 对 expected size mismatch 稳定失败。
+- [x] `commit_object` 对 expected digest mismatch 稳定失败。
+- [x] expired slot 不能 upload/commit。
+- [x] expired download ticket 不能下载对象。
+- [x] unauthorized requester 仍不能拿 ticket 或下载对象。
+- [x] direct/group attachment manifest grant 仍通过现有 tests。
+- [x] E2EE object encryption 仍返回 `not_supported` 或 policy violation。
+- [x] 配置项如新增已同步 docs 或记录到 Step 06。
+- [x] 本步骤在进入下一步之前已经创建聚焦 commit。
 
 ## 8. 验证方式
 
@@ -114,23 +114,23 @@ Step index：03
 
 | Review 项 | 结果 | 备注 |
 |---|---|---|
-| 发现问题 | 执行时填写 |  |
-| 已修复问题 | 执行时填写 |  |
-| 剩余风险 | 执行时填写 |  |
-| 新增或缺失测试 | 执行时填写 |  |
-| 已更新或缺失文档 | 执行时填写 |  |
-| 并行安全是否仍成立 | 执行时填写 |  |
-| Agent 是否越界修改 | 执行时填写 |  |
-| 互斥资源是否被修改 | 执行时填写 |  |
-| 合并风险 | 执行时填写 |  |
+| 发现问题 | 已处理 | 初版 upload 先按大小拒绝再查 slot，Review 后调整为先验证 slot/token/status/expiry，再执行 max bytes 判断；测试旧导入和长 SQL 行已清理。 |
+| 已修复问题 | 已修复 | 增加 slot expected metadata 和 expires_at nullable schema；commit 校验 expected size/digest/content_type、MIME allowlist、max bytes；upload 和 commit 均校验过期；download route 校验 ticket expiry；upload route 将 AwikiError 映射为 HTTP 4xx；新增 cleanup helper。 |
+| 剩余风险 | 已记录 | 新增 `AWIKI_MAX_ATTACHMENT_BYTES`、`AWIKI_ATTACHMENT_ALLOWED_MIME_TYPES` 配置尚未同步 README/deploy，按本 Plan 交给 Step 06；cleanup helper 暂未暴露公开 endpoint。 |
+| 新增或缺失测试 | 已覆盖 | 新增 expected metadata/MIME/quota/expiry/cleanup tests；保留 direct/group attachment manifest grant 交互覆盖。 |
+| 已更新或缺失文档 | 已记录 | 本 Plan 和 Step 台账已更新；用户文档由 Step 06 汇总同步。 |
+| 并行安全是否仍成立 | 是 | 本 Step 串行执行，未启动写入型并行 worker。 |
+| Agent 是否越界修改 | 否 | 修改范围限于 Step 03 允许的 attachments、routes、settings、storage、tests 和本 Plan/Step 文档。 |
+| 互斥资源是否被修改 | 是，按计划修改 | 修改 `attachments/core.py`、`app/routes.py`、`app/settings.py`、`storage/db.py`。 |
+| 合并风险 | 低 | 兼容列为 nullable；focused、交互、ASGI smoke 和 full local tests 均通过。 |
 | Group gate 影响 | 无 | 串行 |
 
 ## 10. Commit 要求
 
 - Commit 时机：实现、验证、Review 完成后。
 - Commit 范围：attachment lifecycle/security 相关代码、tests、必要 docs。
-- Commit 前状态：记录 `git status --short --branch`。
-- Commit 后证据：记录 commit hash 和 commit 后状态。
+- Commit 前状态：`## main...origin/main [ahead 3]`，修改 `plan/20260710-open-server-next-functions-review/plan.md`、`plan/20260710-open-server-next-functions-review/steps/03-attachment-lifecycle-security.md`、`src/awiki_open_server/app/routes.py`、`src/awiki_open_server/app/settings.py`、`src/awiki_open_server/attachments/core.py`、`src/awiki_open_server/storage/db.py`、`tests/test_attachments.py`。
+- Commit 后证据：提交后回填 commit hash 和 commit 后状态。
 - 建议消息：`attachments: enforce object lifecycle checks`。
 
 ## 11. Blocked 处理
