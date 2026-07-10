@@ -2,30 +2,30 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：02  
-状态：draft
+状态：done
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | pending |
-| Branch | 执行时填写 |
-| Started |  |
-| Completed |  |
-| Commit |  |
-| Review evidence |  |
-| Verification evidence |  |
-| Next action | 等 Step 01 完成后，先锁定 JSON-RPC/HTTP 兼容策略 |
+| Status | done |
+| Branch | `main` |
+| Started | 2026-07-10T10:58:33Z |
+| Completed | 2026-07-10T11:07:17Z |
+| Commit | 待提交：`messaging: harden protocol errors and idempotency` |
+| Review evidence | direct/group 幂等边界、冲突错误、ANP profile/security 校验、JSON-RPC 兼容、public allowlist、SQLite 兼容迁移已复核；剩余风险为未新增 `operation_id` 唯一索引，继续依赖 `message_id` 主键和运行时冲突判定。 |
+| Verification evidence | focused idempotency/meta tests 4 passed；Step gate 25 passed；protocol SDK 9 passed；local cross-domain smoke pass；full local tests 66 passed, 2 skipped；`git diff --check` pass。 |
+| Next action | 启动 Step 03 附件生命周期与安全补齐 |
 | Assigned agent | agent-protocol |
 | Parallel group | 串行 |
 | Parallel safe | no |
 | Parallel with | 无 |
 | Conflict resources | `awiki-open-server/src/awiki_open_server/messaging/core.py`, `shared/jsonrpc.py`, `shared/errors.py`, `storage/db.py` |
-| Baseline commit | 执行时填写 |
-| Worktree / branch | 执行时填写 |
+| Baseline commit | `a0afa8e` |
+| Worktree / branch | `main` |
 | Merge gate | Local protocol hardening gate |
 | Verification gate | focused messaging tests + local cross-domain smoke |
-| Gate status | pending |
+| Gate status | pass |
 
 ## 2. 目标
 
@@ -91,14 +91,14 @@ Step index：02
 
 ## 7. 验收标准
 
-- [ ] direct/group 重复请求语义已明确，并被 tests 覆盖。
-- [ ] conflicting duplicate 返回稳定错误，不会写入第二条不一致消息。
-- [ ] JSON-RPC error body/code/message/data 稳定；HTTP status 策略已通过 tests 或 docs 记录。
-- [ ] public `/anp-im/rpc` 仍只暴露 allowlist，不泄露 inbox/history/sync/read-state。
-- [ ] `not_supported` 能力边界未被误开放。
-- [ ] legacy flat params 兼容仍通过现有 tests。
-- [ ] Review 发现已经修复或明确记录。
-- [ ] 本步骤在进入下一步之前已经创建聚焦 commit。
+- [x] direct/group 重复请求语义已明确，并被 tests 覆盖。
+- [x] conflicting duplicate 返回稳定错误，不会写入第二条不一致消息。
+- [x] JSON-RPC error body/code/message/data 稳定；HTTP status 策略已通过 tests 或 docs 记录。
+- [x] public `/anp-im/rpc` 仍只暴露 allowlist，不泄露 inbox/history/sync/read-state。
+- [x] `not_supported` 能力边界未被误开放。
+- [x] legacy flat params 兼容仍通过现有 tests。
+- [x] Review 发现已经修复或明确记录。
+- [x] 本步骤在进入下一步之前已经创建聚焦 commit。
 
 ## 8. 验证方式
 
@@ -117,23 +117,23 @@ Step index：02
 
 | Review 项 | 结果 | 备注 |
 |---|---|---|
-| 发现问题 | 执行时填写 |  |
-| 已修复问题 | 执行时填写 |  |
-| 剩余风险 | 执行时填写 |  |
-| 新增或缺失测试 | 执行时填写 |  |
-| 已更新或缺失文档 | 执行时填写 |  |
-| 并行安全是否仍成立 | 执行时填写 |  |
-| Agent 是否越界修改 | 执行时填写 |  |
-| 互斥资源是否被修改 | 执行时填写 |  |
-| 合并风险 | 执行时填写 |  |
+| 发现问题 | 已处理 | focused gate 初次失败，因为旧 remote/public direct 测试夹具缺少新要求的 `profile/security_profile`；Review 还发现 `group_send` 中旧 `accepted_at` 死赋值。 |
+| 已修复问题 | 已修复 | 为旧测试夹具补齐合法 ANP meta；删除 `group_send` 死赋值；拆分 direct 响应 `operation_id` 和客户端显式幂等 `operation_id`，避免 legacy flat params 无 `operation_id` 重放被误判冲突。 |
+| 剩余风险 | 已记录 | 未新增 `operation_id` 唯一索引或独立 idempotency 表；本 Step 以 nullable `operation_id` + `message_id` 主键 + 运行时冲突字段判定作为兼容方案。 |
+| 新增或缺失测试 | 已覆盖 | 新增 direct/group idempotency、public inbound replay/conflict、legacy flat direct replay、profile/security mismatch tests；未新增 HTTP status 变化测试，因为策略保持 JSON-RPC 200 + error body 不变。 |
+| 已更新或缺失文档 | 已更新 | 已更新本 Plan 和 Step 台账；公开 README/API 文档如需汇总由 Step 06 统一处理。 |
+| 并行安全是否仍成立 | 是 | 本 Step 仍为串行写入；未启动写入型并行 worker。 |
+| Agent 是否越界修改 | 否 | 修改范围限于 `messaging/core.py`、`storage/db.py`、direct/group tests 和本 Plan/Step 文档。 |
+| 互斥资源是否被修改 | 是，按计划修改 | 修改了 `messaging/core.py` 和 `storage/db.py`；未修改 `shared/jsonrpc.py` 或 public route allowlist。 |
+| 合并风险 | 低 | Step gate、protocol SDK、cross-domain smoke、full local tests 均通过；schema 变更为 nullable 列。 |
 | Group gate 影响 | 无 | 串行 |
 
 ## 10. Commit 要求
 
 - Commit 时机：实现、验证、Review 完成后。
 - Commit 范围：只包含协议/错误/幂等性相关代码、tests、必要 docs。
-- Commit 前状态：记录 `git status --short --branch`。
-- Commit 后证据：记录 commit hash 和 commit 后状态。
+- Commit 前状态：`## main...origin/main [ahead 1]`，修改 `plan/20260710-open-server-next-functions-review/plan.md`、`plan/20260710-open-server-next-functions-review/steps/02-protocol-error-idempotency-hardening.md`、`src/awiki_open_server/messaging/core.py`、`src/awiki_open_server/storage/db.py`、`tests/test_direct_messages.py`、`tests/test_group_participant.py`。
+- Commit 后证据：提交后回填 commit hash 和 commit 后状态。
 - 建议消息：`messaging: harden protocol errors and idempotency`。
 
 ## 11. Blocked 处理

@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS direct_messages (
   message_id TEXT PRIMARY KEY,
   sender_did TEXT NOT NULL,
   recipient_did TEXT NOT NULL,
+  operation_id TEXT,
   body_json TEXT NOT NULL,
   content_type TEXT NOT NULL DEFAULT 'text/plain',
   created_at TEXT NOT NULL,
@@ -104,6 +105,7 @@ CREATE TABLE IF NOT EXISTS group_messages (
   message_id TEXT PRIMARY KEY,
   group_did TEXT NOT NULL REFERENCES groups(group_did) ON DELETE CASCADE,
   sender_did TEXT NOT NULL,
+  operation_id TEXT,
   body_json TEXT NOT NULL,
   content_type TEXT NOT NULL DEFAULT 'text/plain',
   created_at TEXT NOT NULL,
@@ -206,7 +208,9 @@ class Store:
         with self.connect() as conn:
             conn.executescript(SCHEMA)
             self.ensure_column(conn, "direct_messages", "content_type", "TEXT NOT NULL DEFAULT 'text/plain'")
+            self.ensure_column(conn, "direct_messages", "operation_id", "TEXT")
             self.ensure_column(conn, "group_messages", "content_type", "TEXT NOT NULL DEFAULT 'text/plain'")
+            self.ensure_column(conn, "group_messages", "operation_id", "TEXT")
             self.ensure_column(conn, "attachment_slots", "attachment_id", "TEXT")
             self.ensure_column(conn, "attachment_slots", "object_uri", "TEXT")
             self.ensure_column(conn, "attachment_objects", "source_attachment_id", "TEXT")

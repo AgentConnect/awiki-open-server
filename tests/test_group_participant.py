@@ -213,6 +213,53 @@ async def test_group_local_views_support_anp_params_and_pagination(client):
 
 
 @pytest.mark.asyncio
+async def test_group_send_is_idempotent_for_same_message_and_rejects_conflicts(client):
+    alice_did, alice_token = await register(client, "group-idem-alice")
+    group_did = "did:wba:testserver:groups:open"
+    await rpc(client, "/im/rpc", "group.join", {"group_did": group_did}, token=alice_token)
+    meta = {
+        "profile": "anp.group.base.v1",
+        "security_profile": "transport-protected",
+        "sender_did": alice_did,
+        "target": {"kind": "group", "did": group_did},
+        "operation_id": "op-group-idem",
+        "message_id": "msg-group-idem",
+        "content_type": "text/plain",
+    }
+    body = {"text": "idempotent group"}
+
+    first = await rpc(client, "/im/rpc", "group.send", {"meta": meta, "body": body}, token=alice_token)
+    replay = await rpc(client, "/im/rpc", "group.send", {"meta": meta, "body": body}, token=alice_token)
+    assert replay["result"]["idempotent_replay"] is True
+    assert replay["result"]["message_id"] == first["result"]["message_id"]
+    assert replay["result"]["server_seq"] == first["result"]["server_seq"]
+
+    messages = await rpc(client, "/im/rpc", "group.list_messages", {"group_did": group_did}, token=alice_token)
+    assert [message["message_id"] for message in messages["result"]["messages"]] == ["msg-group-idem"]
+
+    changed_body = await rpc(
+        client,
+        "/im/rpc",
+        "group.send",
+        {"meta": meta, "body": {"text": "changed group"}},
+        token=alice_token,
+    )
+    assert changed_body["error"]["message"] == "message_id_conflict"
+    assert changed_body["error"]["data"]["fields"] == ["body"]
+
+    changed_operation_meta = {**meta, "operation_id": "op-group-idem-other"}
+    changed_operation = await rpc(
+        client,
+        "/im/rpc",
+        "group.send",
+        {"meta": changed_operation_meta, "body": body},
+        token=alice_token,
+    )
+    assert changed_operation["error"]["message"] == "message_id_conflict"
+    assert changed_operation["error"]["data"]["fields"] == ["operation_id"]
+
+
+@pytest.mark.asyncio
 async def test_public_anp_group_join_requires_origin_and_peer_signature(tmp_path, monkeypatch):
     local_private_key = generate_ed25519_private_key_pem()
     app = create_app(
@@ -284,4 +331,3 @@ async def test_public_anp_group_join_requires_origin_and_peer_signature(tmp_path
         assert data["result"]["joined"] is True
         assert data["result"]["group_did"] == group_did
         assert data["result"]["member_did"] == remote_user_did
-

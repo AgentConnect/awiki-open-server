@@ -317,6 +317,8 @@ async def test_remote_direct_requires_origin_proof(client, monkeypatch):
         "direct.send",
         {
             "meta": {
+                "profile": "anp.direct.base.v1",
+                "security_profile": "transport-protected",
                 "sender_did": alice_did,
                 "target": {"kind": "agent", "did": remote_did},
                 "operation_id": "op-no-proof",
@@ -352,6 +354,8 @@ async def test_remote_direct_rejects_invalid_origin_proof_signature(client, monk
 
     monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
     meta = {
+        "profile": "anp.direct.base.v1",
+        "security_profile": "transport-protected",
         "sender_did": alice_did,
         "target": {"kind": "agent", "did": remote_did},
         "operation_id": "op-bad-proof",
@@ -397,6 +401,8 @@ async def test_remote_direct_rejects_message_service_incompatible_result(client,
     monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
     monkeypatch.setattr(messaging_services, "_http_post_json", fake_post_json)
     meta = {
+        "profile": "anp.direct.base.v1",
+        "security_profile": "transport-protected",
         "sender_did": alice_did,
         "target": {"kind": "agent", "did": remote_did},
         "operation_id": "op-bad-result",
@@ -460,6 +466,8 @@ async def test_remote_direct_with_service_identity_adds_verifiable_http_signatur
         monkeypatch.setattr(messaging_services, "_http_post_json", fake_post_json)
 
         meta = {
+            "profile": "anp.direct.base.v1",
+            "security_profile": "transport-protected",
             "sender_did": alice_did,
             "target": {"kind": "agent", "did": remote_did},
             "operation_id": "op-signed",
@@ -552,8 +560,36 @@ async def test_public_anp_direct_requires_local_recipient(client, monkeypatch):
         },
     )
     assert accepted["result"]["message_id"] == "msg-remote-in"
+    replay = await rpc(
+        client,
+        "/anp-im/rpc",
+        "direct.send",
+        {
+            "meta": accept_meta,
+            "auth": {"scheme": "community-dev-bearer", "origin_proof": origin_proof(accept_meta, accept_body, remote_key)},
+            "body": accept_body,
+        },
+    )
+    assert replay["result"]["idempotent_replay"] is True
+    assert replay["result"]["server_seq"] == accepted["result"]["server_seq"]
+
+    conflict_body = {"text": "changed remote direct"}
+    conflict = await rpc(
+        client,
+        "/anp-im/rpc",
+        "direct.send",
+        {
+            "meta": accept_meta,
+            "auth": {"scheme": "community-dev-bearer", "origin_proof": origin_proof(accept_meta, conflict_body, remote_key)},
+            "body": conflict_body,
+        },
+    )
+    assert conflict["error"]["message"] == "message_id_conflict"
+    assert conflict["error"]["data"]["fields"] == ["body"]
+
     inbox = await rpc(client, "/im/rpc", "inbox.get", token=alice_token)
     assert inbox["result"]["messages"][0]["body"]["text"] == "hello open server"
+    assert [message["message_id"] for message in inbox["result"]["messages"]] == ["msg-remote-in"]
 
 
 @pytest.mark.asyncio
@@ -658,6 +694,8 @@ async def test_public_anp_direct_verifies_signature_against_public_base_url(tmp_
     async with httpx.AsyncClient(transport=transport, base_url="http://internal-testserver") as signed_client:
         local = await rpc(signed_client, "/did-auth/rpc", "register", {"handle": "signed-public-url"})
         meta = {
+            "profile": "anp.direct.base.v1",
+            "security_profile": "transport-protected",
             "sender_did": remote_user_did,
             "target": {"kind": "agent", "did": local["result"]["did"]},
             "operation_id": "op-public-url",
@@ -721,6 +759,21 @@ async def test_anp_envelope_meta_required_fields_and_target_validation(client):
     wrong_direct_kind = await rpc(client, "/im/rpc", "direct.send", {"meta": wrong_direct_kind_meta, "body": {"text": "wrong kind"}}, token=alice_token)
     assert wrong_direct_kind["error"]["message"] == "anp_meta_target_kind_mismatch"
 
+    wrong_direct_profile_meta = {**direct_meta, "operation_id": "op-meta-direct-profile", "message_id": "msg-meta-direct-profile", "profile": "anp.group.base.v1"}
+    wrong_direct_profile = await rpc(client, "/im/rpc", "direct.send", {"meta": wrong_direct_profile_meta, "body": {"text": "wrong profile"}}, token=alice_token)
+    assert wrong_direct_profile["error"]["message"] == "anp_meta_profile_mismatch"
+    assert wrong_direct_profile["error"]["data"]["expected"] == "anp.direct.base.v1"
+
+    wrong_direct_security_meta = {
+        **direct_meta,
+        "operation_id": "op-meta-direct-security",
+        "message_id": "msg-meta-direct-security",
+        "security_profile": "direct-e2ee",
+    }
+    wrong_direct_security = await rpc(client, "/im/rpc", "direct.send", {"meta": wrong_direct_security_meta, "body": {"text": "wrong security"}}, token=alice_token)
+    assert wrong_direct_security["error"]["message"] == "anp_meta_security_profile_mismatch"
+    assert wrong_direct_security["error"]["data"]["expected"] == "transport-protected"
+
     wrong_direct_target_meta = {**direct_meta, "operation_id": "op-meta-direct-target", "message_id": "msg-meta-direct-target", "target": {"kind": "agent", "did": charlie}}
     wrong_direct_target = await rpc(
         client,
@@ -760,6 +813,21 @@ async def test_anp_envelope_meta_required_fields_and_target_validation(client):
     missing_group_content_type = await rpc(client, "/im/rpc", "group.send", {"meta": missing_group_content_type_meta, "body": {"text": "missing group content type"}}, token=alice_token)
     assert missing_group_content_type["error"]["message"] == "anp_meta_content_type_required"
 
+    wrong_group_profile_meta = {**group_meta, "operation_id": "op-meta-group-profile", "message_id": "msg-meta-group-profile", "profile": "anp.direct.base.v1"}
+    wrong_group_profile = await rpc(client, "/im/rpc", "group.send", {"meta": wrong_group_profile_meta, "body": {"text": "wrong group profile"}}, token=alice_token)
+    assert wrong_group_profile["error"]["message"] == "anp_meta_profile_mismatch"
+    assert wrong_group_profile["error"]["data"]["expected"] == "anp.group.base.v1"
+
+    wrong_group_security_meta = {
+        **group_meta,
+        "operation_id": "op-meta-group-security",
+        "message_id": "msg-meta-group-security",
+        "security_profile": "group-e2ee",
+    }
+    wrong_group_security = await rpc(client, "/im/rpc", "group.send", {"meta": wrong_group_security_meta, "body": {"text": "wrong group security"}}, token=alice_token)
+    assert wrong_group_security["error"]["message"] == "anp_meta_security_profile_mismatch"
+    assert wrong_group_security["error"]["data"]["expected"] == "transport-protected"
+
     wrong_group_target_meta = {**group_meta, "operation_id": "op-meta-group-target", "message_id": "msg-meta-group-target", "target": {"kind": "group", "did": "did:wba:testserver:groups:other"}}
     wrong_group_target = await rpc(
         client,
@@ -772,6 +840,73 @@ async def test_anp_envelope_meta_required_fields_and_target_validation(client):
 
     group_messages = await rpc(client, "/im/rpc", "group.list_messages", {"group_did": group_did}, token=alice_token)
     assert [message["message_id"] for message in group_messages["result"]["messages"]] == ["msg-meta-group"]
+
+
+@pytest.mark.asyncio
+async def test_direct_send_is_idempotent_for_same_message_and_rejects_conflicts(client):
+    alice, alice_token = await register(client, "idem-alice")
+    bob, bob_token = await register(client, "idem-bob")
+    meta = {
+        "profile": "anp.direct.base.v1",
+        "security_profile": "transport-protected",
+        "sender_did": alice,
+        "target": {"kind": "agent", "did": bob},
+        "operation_id": "op-direct-idem",
+        "message_id": "msg-direct-idem",
+        "content_type": "text/plain",
+    }
+    body = {"text": "idempotent direct"}
+
+    first = await rpc(client, "/im/rpc", "direct.send", {"meta": meta, "body": body}, token=alice_token)
+    replay = await rpc(client, "/im/rpc", "direct.send", {"meta": meta, "body": body}, token=alice_token)
+    assert replay["result"]["idempotent_replay"] is True
+    assert replay["result"]["message_id"] == first["result"]["message_id"]
+    assert replay["result"]["server_seq"] == first["result"]["server_seq"]
+
+    history = await rpc(client, "/im/rpc", "direct.get_history", {"peer_did": alice}, token=bob_token)
+    assert [message["message_id"] for message in history["result"]["messages"]] == ["msg-direct-idem"]
+
+    changed_body = await rpc(
+        client,
+        "/im/rpc",
+        "direct.send",
+        {"meta": meta, "body": {"text": "changed direct"}},
+        token=alice_token,
+    )
+    assert changed_body["error"]["message"] == "message_id_conflict"
+    assert changed_body["error"]["data"]["fields"] == ["body"]
+
+    changed_operation_meta = {**meta, "operation_id": "op-direct-idem-other"}
+    changed_operation = await rpc(
+        client,
+        "/im/rpc",
+        "direct.send",
+        {"meta": changed_operation_meta, "body": body},
+        token=alice_token,
+    )
+    assert changed_operation["error"]["message"] == "message_id_conflict"
+    assert changed_operation["error"]["data"]["fields"] == ["operation_id"]
+
+    flat_first = await rpc(
+        client,
+        "/im/rpc",
+        "direct.send",
+        {"recipient_did": bob, "message_id": "msg-direct-flat-idem", "text": "flat idempotent direct"},
+        token=alice_token,
+    )
+    flat_replay = await rpc(
+        client,
+        "/im/rpc",
+        "direct.send",
+        {"recipient_did": bob, "message_id": "msg-direct-flat-idem", "text": "flat idempotent direct"},
+        token=alice_token,
+    )
+    assert flat_replay["result"]["idempotent_replay"] is True
+    assert flat_replay["result"]["operation_id"] == flat_first["result"]["operation_id"]
+    assert flat_replay["result"]["server_seq"] == flat_first["result"]["server_seq"]
+
+    history_after_flat = await rpc(client, "/im/rpc", "direct.get_history", {"peer_did": alice}, token=bob_token)
+    assert [message["message_id"] for message in history_after_flat["result"]["messages"]] == ["msg-direct-idem", "msg-direct-flat-idem"]
 
 
 @pytest.mark.asyncio
@@ -1011,4 +1146,3 @@ async def test_message_local_views_project_payload_attachment_and_binary_content
     assert [message["type"] for message in group_thread["result"]["messages"]] == ["attachment_manifest", "binary"]
     assert group_thread["result"]["messages"][0]["content"] == manifest_payload
     assert group_thread["result"]["messages"][1]["content"] == "AAECAw"
-

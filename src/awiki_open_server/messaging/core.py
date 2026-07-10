@@ -10,7 +10,7 @@ from awiki_open_server.app.settings import Settings
 from awiki_open_server.attachments.core import ATTACHMENT_HANDLERS
 from awiki_open_server.service_identity import validate_origin_proof_structure
 from awiki_open_server.shared import runtime
-from awiki_open_server.shared.errors import InvalidParams, NotFound, NotSupported, Unauthorized
+from awiki_open_server.shared.errors import Conflict, InvalidParams, NotFound, NotSupported, Unauthorized
 from awiki_open_server.shared.ids import new_id, now_iso
 from awiki_open_server.user_compat.core import current_did, get_settings, get_store
 
@@ -101,6 +101,7 @@ def _store_direct_message(
     content_type: str,
     message_id: str,
     operation_id: str | None,
+    idempotency_operation_id: str | None,
     sender_local: bool,
     recipient_local: bool,
     delivery_state: str = "accepted",
@@ -108,11 +109,25 @@ def _store_direct_message(
 ) -> dict[str, Any]:
     recipient_event_seq: int | None = None
     store = get_store(request)
+    body_json = _json(body)
     with store.connect() as conn:
+        existing = conn.execute("SELECT * FROM direct_messages WHERE message_id = ?", (message_id,)).fetchone()
+        if existing:
+            return _direct_idempotent_result_or_raise(
+                existing,
+                sender=sender,
+                recipient=recipient,
+                body_json=body_json,
+                content_type=content_type,
+                operation_id=idempotency_operation_id,
+                delivery_state=delivery_state,
+                final_acceptance=final_acceptance,
+            )
         seq = store.next_seq(conn, "direct_messages")
+        created_at = now_iso()
         conn.execute(
-            "INSERT INTO direct_messages(message_id, sender_did, recipient_did, body_json, content_type, created_at, server_seq) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (message_id, sender, recipient, _json(body), content_type, now_iso(), seq),
+            "INSERT INTO direct_messages(message_id, sender_did, recipient_did, operation_id, body_json, content_type, created_at, server_seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (message_id, sender, recipient, operation_id, body_json, content_type, created_at, seq),
         )
         if sender_local:
             conn.execute("INSERT OR IGNORE INTO direct_message_views(owner_did, message_id, peer_did) VALUES (?, ?, ?)", (sender, message_id, recipient))
@@ -120,7 +135,7 @@ def _store_direct_message(
         if recipient_local:
             conn.execute("INSERT OR IGNORE INTO direct_message_views(owner_did, message_id, peer_did) VALUES (?, ?, ?)", (recipient, message_id, sender))
             recipient_event_seq = add_sync_event(conn, recipient, "direct.message.created", {"message_id": message_id, "peer_did": sender, "server_seq": seq})
-    accepted_at = now_iso()
+    accepted_at = created_at
     result = {
         "accepted": delivery_state in {"accepted", "delivered"},
         "message_id": message_id,
@@ -159,6 +174,84 @@ def _store_direct_message(
             },
         )
     return result
+
+
+def _message_conflict(message_id: str, fields: list[str]) -> None:
+    raise Conflict("message_id_conflict", data={"message_id": message_id, "fields": fields})
+
+
+def _stored_operation_id(row: Any) -> str | None:
+    if "operation_id" not in row.keys():
+        return None
+    value = row["operation_id"]
+    return str(value) if value is not None else None
+
+
+def _direct_idempotent_result_or_raise(
+    row: Any,
+    *,
+    sender: str,
+    recipient: str,
+    body_json: str,
+    content_type: str,
+    operation_id: str | None,
+    delivery_state: str = "accepted",
+    final_acceptance: bool = True,
+) -> dict[str, Any]:
+    fields: list[str] = []
+    if row["sender_did"] != sender:
+        fields.append("sender_did")
+    if row["recipient_did"] != recipient:
+        fields.append("recipient_did")
+    if row["content_type"] != content_type:
+        fields.append("content_type")
+    if row["body_json"] != body_json:
+        fields.append("body")
+    stored_operation_id = _stored_operation_id(row)
+    if operation_id is not None and stored_operation_id != operation_id:
+        fields.append("operation_id")
+    if fields:
+        _message_conflict(str(row["message_id"]), fields)
+    body = _load(row["body_json"])
+    return {
+        "accepted": delivery_state in {"accepted", "delivered"},
+        "message_id": row["message_id"],
+        "operation_id": stored_operation_id or operation_id,
+        "server_seq": row["server_seq"],
+        "sender_did": row["sender_did"],
+        "recipient_did": row["recipient_did"],
+        "target_did": row["recipient_did"],
+        "delivery_state": delivery_state,
+        "final_acceptance": final_acceptance,
+        "accepted_at": row["created_at"],
+        "content_type": row["content_type"],
+        "body": body,
+        "idempotent_replay": True,
+    }
+
+
+def _direct_existing_idempotent_result(
+    request: Request,
+    *,
+    sender: str,
+    recipient: str,
+    body: dict[str, Any],
+    content_type: str,
+    message_id: str,
+    operation_id: str | None,
+) -> dict[str, Any] | None:
+    with get_store(request).connect() as conn:
+        existing = conn.execute("SELECT * FROM direct_messages WHERE message_id = ?", (message_id,)).fetchone()
+    if not existing:
+        return None
+    return _direct_idempotent_result_or_raise(
+        existing,
+        sender=sender,
+        recipient=recipient,
+        body_json=_json(body),
+        content_type=content_type,
+        operation_id=operation_id,
+    )
 
 
 def _is_daemon_heartbeat(meta: dict[str, Any], body: dict[str, Any], content_type: str) -> bool:
@@ -358,7 +451,8 @@ def direct_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
     if not public_rpc and authenticated_sender and sender != authenticated_sender:
         raise Unauthorized("sender_did_mismatch")
     message_id = params.get("message_id") or new_id("msg")
-    operation_id = params.get("operation_id") or new_id("op")
+    operation_id = params.get("operation_id")
+    response_operation_id = operation_id or new_id("op")
     with get_store(request).connect() as conn:
         sender_local = _user_exists(conn, sender)
         recipient_local = _user_exists(conn, recipient)
@@ -382,7 +476,7 @@ def direct_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
                 body=proof_body,
                 content_type=content_type,
                 message_id=message_id,
-                operation_id=operation_id,
+                operation_id=response_operation_id,
                 recipient_local=True,
             )
         return _store_direct_message(
@@ -392,7 +486,8 @@ def direct_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
             body=proof_body,
             content_type=content_type,
             message_id=message_id,
-            operation_id=operation_id,
+            operation_id=response_operation_id,
+            idempotency_operation_id=operation_id,
             sender_local=sender_local,
             recipient_local=True,
         )
@@ -408,7 +503,7 @@ def direct_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
                 body=proof_body,
                 content_type=content_type,
                 message_id=message_id,
-                operation_id=operation_id,
+                operation_id=response_operation_id,
                 recipient_local=True,
             )
         return _store_direct_message(
@@ -418,7 +513,8 @@ def direct_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
             body=body,
             content_type=content_type,
             message_id=message_id,
-            operation_id=operation_id,
+            operation_id=response_operation_id,
+            idempotency_operation_id=operation_id,
             sender_local=True,
             recipient_local=True,
         )
@@ -432,6 +528,17 @@ def direct_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
         body=proof_body,
         sender_did_document=_resolve_did_document_for_proof(request, sender),
     )
+    existing = _direct_existing_idempotent_result(
+        request,
+        sender=sender,
+        recipient=recipient,
+        body=proof_body,
+        content_type=content_type,
+        message_id=message_id,
+        operation_id=operation_id,
+    )
+    if existing:
+        return existing
     remote = _send_remote_direct(
         settings,
         sender=sender,
@@ -439,7 +546,7 @@ def direct_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
         body=proof_body,
         content_type=content_type,
         message_id=message_id,
-        operation_id=operation_id,
+        operation_id=response_operation_id,
         meta=meta,
         auth=auth,
         client=client,
@@ -452,7 +559,8 @@ def direct_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
         body=proof_body,
         content_type=content_type,
         message_id=message_id,
-        operation_id=operation_id,
+        operation_id=response_operation_id,
+        idempotency_operation_id=operation_id,
         sender_local=True,
         recipient_local=False,
         delivery_state=str(remote.get("delivery_state") or "accepted"),
@@ -511,6 +619,16 @@ def _require_meta_string(meta: dict[str, Any], key: str, error_message: str) -> 
 def _validate_send_envelope_meta(params: dict[str, Any], meta: dict[str, Any], *, target_kind: str, target_did: str | None) -> None:
     if not _is_anp_envelope(params):
         return
+    expected_profile = "anp.group.base.v1" if target_kind == "group" else "anp.direct.base.v1"
+    profile = _require_meta_string(meta, "profile", "anp_meta_profile_required")
+    if profile != expected_profile:
+        raise InvalidParams("anp_meta_profile_mismatch", data={"expected": expected_profile, "actual": profile})
+    security_profile = _require_meta_string(meta, "security_profile", "anp_meta_security_profile_required")
+    if security_profile != "transport-protected":
+        raise InvalidParams(
+            "anp_meta_security_profile_mismatch",
+            data={"expected": "transport-protected", "actual": security_profile},
+        )
     _require_meta_string(meta, "sender_did", "anp_meta_sender_did_required")
     target = meta.get("target")
     if not isinstance(target, dict):
@@ -852,18 +970,29 @@ def group_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
         _validate_message_body_shape(body, content_type, kind="group")
     if not group_did:
         raise InvalidParams("group_did_required")
-    accepted_at = now_iso()
     member_events: list[tuple[str, int]] = []
     store = get_store(request)
     with store.connect() as conn:
         member = conn.execute("SELECT 1 FROM group_members WHERE group_did = ? AND member_did = ?", (group_did, sender)).fetchone()
         if not member:
             raise Unauthorized("not_group_member")
-        seq = store.next_seq(conn, "group_messages")
         message_id = params.get("message_id") or new_id("gmsg")
+        operation_id = params.get("operation_id") or meta.get("operation_id")
+        existing = conn.execute("SELECT * FROM group_messages WHERE message_id = ?", (message_id,)).fetchone()
+        if existing:
+            return _group_idempotent_result_or_raise(
+                existing,
+                group_did=group_did,
+                sender=sender,
+                body_json=_json(body),
+                content_type=content_type,
+                operation_id=operation_id,
+            )
+        seq = store.next_seq(conn, "group_messages")
+        created_at = now_iso()
         conn.execute(
-            "INSERT INTO group_messages(message_id, group_did, sender_did, body_json, content_type, created_at, server_seq) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (message_id, group_did, sender, _json(body), content_type, now_iso(), seq),
+            "INSERT INTO group_messages(message_id, group_did, sender_did, operation_id, body_json, content_type, created_at, server_seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (message_id, group_did, sender, operation_id, _json(body), content_type, created_at, seq),
         )
         members = conn.execute("SELECT member_did FROM group_members WHERE group_did = ?", (group_did,)).fetchall()
         for member_row in members:
@@ -887,7 +1016,7 @@ def group_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
                     "content_type": content_type,
                     "body": body,
                     "server_seq": seq,
-                    "created_at": accepted_at,
+                    "created_at": created_at,
                 }
             },
             {
@@ -902,15 +1031,57 @@ def group_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
         "delivery_state": "accepted",
         "final_acceptance": True,
         "message_id": message_id,
-        "operation_id": params.get("operation_id") or meta.get("operation_id"),
+        "operation_id": operation_id,
         "group_did": group_did,
         "sender_did": sender,
         "server_seq": seq,
         "group_event_seq": str(seq),
         "group_state_version": str(seq),
-        "accepted_at": accepted_at,
+        "accepted_at": created_at,
         "content_type": content_type,
         "body": body,
+    }
+
+
+def _group_idempotent_result_or_raise(
+    row: Any,
+    *,
+    group_did: str,
+    sender: str,
+    body_json: str,
+    content_type: str,
+    operation_id: str | None,
+) -> dict[str, Any]:
+    fields: list[str] = []
+    if row["group_did"] != group_did:
+        fields.append("group_did")
+    if row["sender_did"] != sender:
+        fields.append("sender_did")
+    if row["content_type"] != content_type:
+        fields.append("content_type")
+    if row["body_json"] != body_json:
+        fields.append("body")
+    stored_operation_id = _stored_operation_id(row)
+    if operation_id is not None and stored_operation_id != operation_id:
+        fields.append("operation_id")
+    if fields:
+        _message_conflict(str(row["message_id"]), fields)
+    body = _load(row["body_json"])
+    return {
+        "accepted": True,
+        "delivery_state": "accepted",
+        "final_acceptance": True,
+        "message_id": row["message_id"],
+        "operation_id": stored_operation_id or operation_id,
+        "group_did": row["group_did"],
+        "sender_did": row["sender_did"],
+        "server_seq": row["server_seq"],
+        "group_event_seq": str(row["server_seq"]),
+        "group_state_version": str(row["server_seq"]),
+        "accepted_at": row["created_at"],
+        "content_type": row["content_type"],
+        "body": body,
+        "idempotent_replay": True,
     }
 
 
