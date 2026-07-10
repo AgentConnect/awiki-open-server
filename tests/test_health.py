@@ -59,6 +59,8 @@ def test_im_websocket_accepts_ws_ticket(tmp_path):
 
     assert notification["method"] == "sync"
     assert notification["params"]["owner_did"] == registered["did"]
+    assert "event_seq" not in notification["params"]
+    assert "checkpoint" not in notification["params"]
 
 
 def test_im_websocket_receives_direct_and_group_notifications(tmp_path):
@@ -102,6 +104,8 @@ def test_im_websocket_receives_direct_and_group_notifications(tmp_path):
             assert direct_notification["params"]["message"]["message_id"] == sent["message_id"]
             assert direct_notification["params"]["message"]["body"]["text"] == "hello over ws"
             assert direct_notification["sync"]["event_type"] == "direct.message.created"
+            assert "server_seq" not in direct_notification["sync"]
+            assert "checkpoint" not in direct_notification["sync"]
 
             group_did = "did:wba:testserver:groups:open"
             client.post(
@@ -134,3 +138,5 @@ def test_im_websocket_receives_direct_and_group_notifications(tmp_path):
             assert group_notification["params"]["message"]["message_id"] == group_msg["message_id"]
             assert group_notification["params"]["message"]["body"]["text"] == "group over ws"
             assert group_notification["sync"]["event_type"] == "group.message.created"
+            assert "server_seq" not in group_notification["sync"]
+            assert "read_watermark_server_seq" not in group_notification["sync"]

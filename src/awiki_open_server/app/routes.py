@@ -267,7 +267,7 @@ def mount_routes(app: FastAPI) -> None:
             {
                 "jsonrpc": "2.0",
                 "method": "sync",
-                "params": {"owner_did": did, "event_seq": "0", "source": "awiki-open-server"},
+                "params": {"owner_did": did, "reason": "connected", "source": "awiki-open-server"},
             }
         )
         try:

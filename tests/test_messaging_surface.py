@@ -75,7 +75,7 @@ async def test_direct_group_participant_and_public_surface(client):
     assert read["result"]["read_up_to_seq"] == sent["result"]["server_seq"]
 
     marked = await rpc(client, "/im/rpc", "inbox.mark_read", {"message_ids": [sent["result"]["message_id"]]}, token=bob_token)
-    assert marked["result"]["updated_count"] == 1
+    assert marked["result"]["updated_count"] == 0
 
     group_did = "did:wba:testserver:groups:open"
     joined = await rpc(client, "/im/rpc", "group.join", {"group_did": group_did}, token=alice_token)

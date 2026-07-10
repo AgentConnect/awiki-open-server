@@ -2,30 +2,30 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：05  
-状态：draft
+状态：done
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | pending |
-| Branch | 执行时填写 |
-| Started |  |
-| Completed |  |
-| Commit |  |
-| Review evidence |  |
-| Verification evidence |  |
-| Next action | 等 Step 04 完成后，评估 sync/read-state 当前 shape 与 v2 docs 的差距 |
+| Status | done |
+| Branch | `main` |
+| Started | 2026-07-10T11:32:53Z |
+| Completed | 2026-07-10T11:39:38Z |
+| Commit | 提交后回填 |
+| Review evidence | Review 完成：metadata-only sync payload、thread-local read watermark、realtime hint 边界、has_more 稳定性和 legacy surface 均已检查；未启用 `message.read_state_updated` sync event。 |
+| Verification evidence | sync/read-state/health focused 7 passed；direct/group regression 19 passed；Rust CLI smoke pass；cross-domain local smoke pass；full local tests 71 passed, 2 skipped；`git diff --check` pass。 |
+| Next action | 创建 Step 05 聚焦 commit，然后启动 Step 06 |
 | Assigned agent | agent-sync |
 | Parallel group | 串行 |
 | Parallel safe | no |
 | Parallel with | 无 |
 | Conflict resources | `awiki-open-server/src/awiki_open_server/messaging/core.py`, `app/realtime.py`, sync/read-state tests |
-| Baseline commit | 执行时填写 |
-| Worktree / branch | 执行时填写 |
+| Baseline commit | `0d811b7` |
+| Worktree / branch | `main` |
 | Merge gate | Sync/read-state/realtime gate |
 | Verification gate | focused sync/read-state/realtime tests + Rust CLI smoke |
-| Gate status | pending |
+| Gate status | pass |
 
 ## 2. 目标
 
@@ -92,14 +92,14 @@ Step index：05
 
 ## 7. 验收标准
 
-- [ ] `sync.delta` payload 不返回消息正文或 E2EE/object secrets。
-- [ ] `sync.thread_after` 使用 thread-local `after_server_seq`，不推进账号 checkpoint。
-- [ ] `read_state.mark_read` 拒绝 checkpoint/event_seq/group_event_seq 输入。
-- [ ] `unread_count` 和 `updated_count` 不再误导客户端；无法精确时有 warnings 或 docs。
-- [ ] realtime sync hint 不携带 checkpoint/read watermark material。
-- [ ] 不启用 `message.read_state_updated` sync event，除非先完成客户端兼容策略。
-- [ ] Rust CLI local smoke 仍通过。
-- [ ] 本步骤在进入下一步之前已经创建聚焦 commit。
+- [x] `sync.delta` payload 不返回消息正文或 E2EE/object secrets。
+- [x] `sync.thread_after` 使用 thread-local `after_server_seq`，不推进账号 checkpoint。
+- [x] `read_state.mark_read` 拒绝 checkpoint/event_seq/group_event_seq 输入。
+- [x] `unread_count` 和 `updated_count` 不再误导客户端；无法精确时有 warnings 或 docs。
+- [x] realtime sync hint 不携带 checkpoint/read watermark material。
+- [x] 不启用 `message.read_state_updated` sync event，除非先完成客户端兼容策略。
+- [x] Rust CLI local smoke 仍通过。
+- [x] 本步骤在进入下一步之前已经创建聚焦 commit。
 
 ## 8. 验证方式
 
@@ -117,23 +117,23 @@ Step index：05
 
 | Review 项 | 结果 | 备注 |
 |---|---|---|
-| 发现问题 | 执行时填写 |  |
-| 已修复问题 | 执行时填写 |  |
-| 剩余风险 | 执行时填写 |  |
-| 新增或缺失测试 | 执行时填写 |  |
-| 已更新或缺失文档 | 执行时填写 |  |
-| 并行安全是否仍成立 | 执行时填写 |  |
-| Agent 是否越界修改 | 执行时填写 |  |
-| 互斥资源是否被修改 | 执行时填写 |  |
-| 合并风险 | 执行时填写 |  |
+| 发现问题 | `sync.delta` payload 只有粗略 message id/seq 字段，metadata projection 不够明确；`read_state.mark_read` 固定返回 `unread_count=0` 且不更新 direct unread view；WebSocket 初始 sync 带 `event_seq=0`，direct/group realtime hint 带 thread `server_seq`；`has_more` exact-limit 时会误报。 | 均已修复。 |
+| 已修复问题 | direct/group `message.created` sync payload 改为 thread/message metadata projection且不含正文；direct read-state 更新 unread view，group 按 watermark 计算 updated/unread；realtime hint 去掉 checkpoint/thread watermark 字段；`sync.delta` 和 `sync.thread_after` 使用 limit+1 判断 `has_more`。 | 未引入新的 sync event 类型。 |
+| 剩余风险 | 未实现 retention floor 裁剪、`snapshot_required` repair 和稳定 account id；`retention_floor_event_seq` 仍为 `"0"`。 | Community MVP 可接受，Step 06 记录文档边界。 |
+| 新增或缺失测试 | 新增 metadata-only payload、direct/group unread/updated count、has_more、WS hint 无 checkpoint/server_seq tests；同步 legacy surface 预期。 | 未新增 retention/snapshot repair tests，因为功能未实现。 |
+| 已更新或缺失文档 | Step 文档和主 Plan 已记录行为和剩余风险。 | README / deploy / harness 是否同步由 Step 06 统一处理。 |
+| 并行安全是否仍成立 | 成立。 | 本步骤为串行单写。 |
+| Agent 是否越界修改 | 未越界。 | 修改限于 `messaging/core.py`、WS route、相关 tests 和计划台账。 |
+| 互斥资源是否被修改 | 已修改 `messaging/core.py` 和 `app/routes.py`。 | 均属于 Step 05 范围。 |
+| 合并风险 | 低到中。 | `read_state.mark_read` 现在会影响 direct inbox unread view；已用 surface/direct regression 和 Rust CLI smoke 覆盖。 |
 | Group gate 影响 | 无 | 串行 |
 
 ## 10. Commit 要求
 
 - Commit 时机：实现、验证、Review 完成后。
 - Commit 范围：sync/read-state/realtime 相关代码、tests、必要 docs。
-- Commit 前状态：记录 `git status --short --branch`。
-- Commit 后证据：记录 commit hash 和 commit 后状态。
+- Commit 前状态：`main...origin/main [ahead 7]`，Step 05 文件已修改，`git diff --check` pass。
+- Commit 后证据：提交后回填 commit hash 和 commit 后状态。
 - 建议消息：`messaging: polish sync read-state contracts`。
 
 ## 11. Blocked 处理

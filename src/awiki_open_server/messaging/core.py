@@ -26,6 +26,53 @@ _user_exists = runtime._user_exists
 add_sync_event = runtime.add_sync_event
 
 
+def _direct_sync_event_payload(
+    *,
+    message_id: str,
+    peer_did: str,
+    sender_did: str,
+    recipient_did: str,
+    server_seq: int,
+    content_type: str,
+) -> dict[str, Any]:
+    return {
+        "thread_kind": "direct",
+        "thread": {"kind": "direct", "peer_did": peer_did},
+        "message": {
+            "id": message_id,
+            "message_id": message_id,
+            "server_seq": str(server_seq),
+            "sender_did": sender_did,
+            "receiver_did": recipient_did,
+            "recipient_did": recipient_did,
+            "content_type": _normalize_content_type(content_type),
+        },
+    }
+
+
+def _group_sync_event_payload(
+    *,
+    message_id: str,
+    group_did: str,
+    sender_did: str,
+    server_seq: int,
+    content_type: str,
+) -> dict[str, Any]:
+    return {
+        "thread_kind": "group",
+        "thread": {"kind": "group", "group_did": group_did},
+        "message": {
+            "id": f"{group_did}:{server_seq}",
+            "message_id": message_id,
+            "server_seq": str(server_seq),
+            "group_event_seq": str(server_seq),
+            "group_did": group_did,
+            "sender_did": sender_did,
+            "content_type": _normalize_content_type(content_type),
+        },
+    }
+
+
 def _http_post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None, body_bytes: bytes | None = None) -> dict[str, Any]:
     return runtime._http_post_json(url, payload, headers=headers, body_bytes=body_bytes)
 
@@ -131,10 +178,34 @@ def _store_direct_message(
         )
         if sender_local:
             conn.execute("INSERT OR IGNORE INTO direct_message_views(owner_did, message_id, peer_did) VALUES (?, ?, ?)", (sender, message_id, recipient))
-            add_sync_event(conn, sender, "direct.message.created", {"message_id": message_id, "peer_did": recipient, "server_seq": seq})
+            add_sync_event(
+                conn,
+                sender,
+                "direct.message.created",
+                _direct_sync_event_payload(
+                    message_id=message_id,
+                    peer_did=recipient,
+                    sender_did=sender,
+                    recipient_did=recipient,
+                    server_seq=seq,
+                    content_type=content_type,
+                ),
+            )
         if recipient_local:
             conn.execute("INSERT OR IGNORE INTO direct_message_views(owner_did, message_id, peer_did) VALUES (?, ?, ?)", (recipient, message_id, sender))
-            recipient_event_seq = add_sync_event(conn, recipient, "direct.message.created", {"message_id": message_id, "peer_did": sender, "server_seq": seq})
+            recipient_event_seq = add_sync_event(
+                conn,
+                recipient,
+                "direct.message.created",
+                _direct_sync_event_payload(
+                    message_id=message_id,
+                    peer_did=sender,
+                    sender_did=sender,
+                    recipient_did=recipient,
+                    server_seq=seq,
+                    content_type=content_type,
+                ),
+            )
     accepted_at = created_at
     result = {
         "accepted": delivery_state in {"accepted", "delivered"},
@@ -170,7 +241,6 @@ def _store_direct_message(
                 "owner_did": recipient,
                 "event_type": "direct.message.created",
                 "event_seq": str(recipient_event_seq or 0),
-                "server_seq": str(seq),
             },
         )
     return result
@@ -1000,7 +1070,13 @@ def group_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
                 conn,
                 member_row["member_did"],
                 "group.message.created",
-                {"message_id": message_id, "group_did": group_did, "server_seq": seq},
+                _group_sync_event_payload(
+                    message_id=message_id,
+                    group_did=group_did,
+                    sender_did=sender,
+                    server_seq=seq,
+                    content_type=content_type,
+                ),
             )
             member_events.append((str(member_row["member_did"]), event_seq))
     for owner_did, event_seq in member_events:
@@ -1023,7 +1099,6 @@ def group_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
                 "owner_did": owner_did,
                 "event_type": "group.message.created",
                 "event_seq": str(event_seq),
-                "server_seq": str(seq),
             },
         )
     return {
@@ -1240,6 +1315,73 @@ def _parse_read_watermark_seq(raw: Any) -> int | None:
     return seq
 
 
+def _apply_read_watermark(
+    conn: Any,
+    *,
+    owner: str,
+    thread: dict[str, Any],
+    saved_seq: int,
+    previous_seq: int,
+    read_at: str,
+) -> tuple[int, int | None]:
+    kind = thread.get("kind")
+    if kind == "direct":
+        peer = thread.get("peer_did")
+        if not peer:
+            raise InvalidParams("thread_required")
+        cursor = conn.execute(
+            """
+            UPDATE direct_message_views
+            SET read_at = ?
+            WHERE owner_did = ?
+              AND peer_did = ?
+              AND read_at IS NULL
+              AND message_id IN (
+                SELECT message_id FROM direct_messages WHERE server_seq <= ?
+              )
+            """,
+            (read_at, owner, peer, saved_seq),
+        )
+        unread = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM direct_message_views v
+            JOIN direct_messages m ON m.message_id = v.message_id
+            WHERE v.owner_did = ?
+              AND v.peer_did = ?
+              AND v.read_at IS NULL
+            """,
+            (owner, peer),
+        ).fetchone()
+        return int(cursor.rowcount or 0), int(unread["count"])
+    if kind == "group":
+        group_did = thread.get("group_did")
+        if not group_did:
+            raise InvalidParams("thread_required")
+        _require_group_member(conn, group_did, owner)
+        updated = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM group_messages
+            WHERE group_did = ?
+              AND server_seq > ?
+              AND server_seq <= ?
+            """,
+            (group_did, previous_seq, saved_seq),
+        ).fetchone()
+        unread = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM group_messages
+            WHERE group_did = ?
+              AND server_seq > ?
+            """,
+            (group_did, saved_seq),
+        ).fetchone()
+        return int(updated["count"]), int(unread["count"])
+    raise InvalidParams("read_state.unsupported_thread_kind")
+
+
 def mark_read(params: dict[str, Any], request: Request) -> dict[str, Any]:
     owner = current_did(request)
     if params.get("event_seq") or params.get("since_event_seq") or params.get("next_event_seq") or params.get("checkpoint") or params.get("read_up_to_group_event_seq"):
@@ -1267,6 +1409,14 @@ def mark_read(params: dict[str, Any], request: Request) -> dict[str, Any]:
             "INSERT OR REPLACE INTO thread_read_states(owner_did, thread_id, read_up_to_seq, updated_at) VALUES (?, ?, ?, ?)",
             (owner, thread_id, saved_seq, read_at),
         )
+        updated_count, unread_count = _apply_read_watermark(
+            conn,
+            owner=owner,
+            thread=thread,
+            saved_seq=saved_seq,
+            previous_seq=previous_seq,
+            read_at=read_at,
+        )
     advanced = saved_seq > previous_seq
     warnings = [] if advanced or seq == previous_seq else ["read_state.watermark_not_advanced"]
     return {
@@ -1274,7 +1424,7 @@ def mark_read(params: dict[str, Any], request: Request) -> dict[str, Any]:
         "owner_did": owner,
         "thread": thread,
         "thread_id": thread_id,
-        "updated_count": 1 if advanced else 0,
+        "updated_count": updated_count,
         "remote_acknowledged": True,
         "partial": False,
         "fallback_used": False,
@@ -1284,7 +1434,7 @@ def mark_read(params: dict[str, Any], request: Request) -> dict[str, Any]:
         "read_watermark_message_id": read_message_id,
         "advanced": advanced,
         "read_at": read_at,
-        "unread_count": 0,
+        "unread_count": unread_count,
         "warnings": warnings,
         "read_up_to_seq": saved_seq,
     }
@@ -1294,8 +1444,10 @@ def sync_delta(params: dict[str, Any], request: Request) -> dict[str, Any]:
     user_did = params.get("user_did")
     if user_did and user_did != owner:
         raise Unauthorized("user_did_mismatch")
-    after = int(params.get("since_event_seq", params.get("after_event_seq", params.get("after", 0))) or 0)
-    limit = int(params.get("limit", 100))
+    after = _parse_non_negative_int(params.get("since_event_seq", params.get("after_event_seq", params.get("after", 0))), field="sync.since_event_seq", default=0)
+    limit = _parse_non_negative_int(params.get("limit"), field="limit", default=100)
+    if limit <= 0:
+        limit = 100
     if limit > 500:
         raise InvalidParams("sync.limit_too_large")
     with get_store(request).connect() as conn:
@@ -1306,15 +1458,34 @@ def sync_delta(params: dict[str, Any], request: Request) -> dict[str, Any]:
             ORDER BY event_seq ASC
             LIMIT ?
             """,
-            (owner, after, limit),
+            (owner, after, limit + 1),
         ).fetchall()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
     events = []
     for row in rows:
         payload = _load(row["payload_json"])
-        aggregate_id = payload.get("message_id") or payload.get("group_did") or payload.get("thread_id") or row["event_id"]
-        aggregate_kind = "group_message" if str(row["event_type"]).startswith("group.") else "direct_message"
-        if str(row["event_type"]).startswith("read_state."):
+        message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        thread = payload.get("thread") if isinstance(payload.get("thread"), dict) else {}
+        aggregate_id = (
+            payload.get("message_id")
+            or message.get("message_id")
+            or payload.get("group_did")
+            or thread.get("group_did")
+            or payload.get("thread_id")
+            or row["event_id"]
+        )
+        event_type = str(row["event_type"])
+        if event_type.startswith("direct.message."):
+            aggregate_kind = "direct_message"
+        elif event_type.startswith("group.message."):
+            aggregate_kind = "group_message"
+        elif event_type.startswith("group."):
+            aggregate_kind = "group"
+        elif event_type.startswith("read_state."):
             aggregate_kind = "read_state"
+        else:
+            aggregate_kind = "event"
         events.append(
             {
                 **dict(row),
@@ -1331,7 +1502,7 @@ def sync_delta(params: dict[str, Any], request: Request) -> dict[str, Any]:
         "owner_subject_id": owner,
         "events": events,
         "next_event_seq": str(next_seq),
-        "has_more": len(events) >= limit,
+        "has_more": has_more,
         "snapshot_required": False,
         "retention_floor_event_seq": "0",
         "warnings": [],
@@ -1352,9 +1523,8 @@ def thread_after(params: dict[str, Any], request: Request) -> dict[str, Any]:
             _require_group_member(conn, group_did, owner)
             rows = conn.execute(
                 "SELECT * FROM group_messages WHERE group_did = ? AND server_seq > ? ORDER BY server_seq ASC LIMIT ?",
-                (group_did, after, limit),
+                (group_did, after, limit + 1),
             ).fetchall()
-            messages = [_group_message_result(row) for row in rows]
         else:
             peer = thread_id.removeprefix("direct:")
             rows = conn.execute(
@@ -1365,9 +1535,14 @@ def thread_after(params: dict[str, Any], request: Request) -> dict[str, Any]:
                 ORDER BY m.server_seq ASC
                 LIMIT ?
                 """,
-                (owner, peer, after, limit),
+                (owner, peer, after, limit + 1),
             ).fetchall()
-            messages = [_direct_message_result(row, owner) for row in rows]
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    if thread_id.startswith("group:"):
+        messages = [_group_message_result(row) for row in rows]
+    else:
+        messages = [_direct_message_result(row, owner) for row in rows]
     next_seq = messages[-1]["server_seq"] if messages else after
     return {
         "thread_id": thread_id,
@@ -1375,7 +1550,7 @@ def thread_after(params: dict[str, Any], request: Request) -> dict[str, Any]:
         "messages": messages,
         "next_server_seq": next_seq,
         "next_after_server_seq": str(next_seq),
-        "has_more": len(messages) >= limit,
+        "has_more": has_more,
         "warnings": [],
     }
 
