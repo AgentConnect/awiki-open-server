@@ -276,6 +276,7 @@ PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-awiki-info \
 | 路由 | 用途 | 说明 |
 | --- | --- | --- |
 | `GET /healthz`<br>`GET /health`<br>`GET /user-service/health`<br>`GET /im/healthz` | 健康检查。 | `/healthz` 返回服务器状态和版本类型。 |
+| `GET /server-info`<br>`GET /user-service/server-info` | 公开服务器能力发现。 | 声明 AWiki Open Server 的 onboarding 是手机号 + handle 无短信/邮箱验证码注册，且不支持对已有 handle 做无验证恢复。 |
 | `POST /did-auth/rpc`<br>`POST /user-service/did-auth/rpc` | DID auth 和注册兼容。 | 本地实现。支持本地 revoke。不发送短信/邮件，也不调用阿里云。 |
 | `POST /did-verify/rpc`<br>`POST /user-service/did-verify/rpc` | DID verification 兼容。 | 暴露 `send_code`、`login` 和 `refresh`，使用本地开发验证码。 |
 | `POST /did/profile/rpc`<br>`POST /user-service/did/profile/rpc` | DID profile RPC 兼容。 | 将 profile 字段映射到本地 DID profile 记录。 |

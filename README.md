@@ -308,6 +308,7 @@ testing.
 | Route | Purpose | Notes |
 | --- | --- | --- |
 | `GET /healthz`<br>`GET /health`<br>`GET /user-service/health`<br>`GET /im/healthz` | Health checks. | `/healthz` returns the server status and edition. |
+| `GET /server-info`<br>`GET /user-service/server-info` | Public server capability discovery. | Declares AWiki Open Server onboarding as phone + handle registration without SMS/email verification, and no no-verification recovery for existing handles. |
 | `POST /did-auth/rpc`<br>`POST /user-service/did-auth/rpc` | DID auth and registration compatibility. | Local implementation. Supports local revoke. Does not send SMS/email or call Aliyun. |
 | `POST /did-verify/rpc`<br>`POST /user-service/did-verify/rpc` | DID verification compatibility. | Exposes `send_code`, `login`, and `refresh` with a local dev code. |
 | `POST /did/profile/rpc`<br>`POST /user-service/did/profile/rpc` | DID profile RPC compatibility. | Maps profile fields to local DID profile records. |

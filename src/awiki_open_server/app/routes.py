@@ -51,6 +51,7 @@ from awiki_open_server.user_compat import (
     ws_ticket_verify as user_compat_ws_ticket_verify,
     ws_tickets as user_compat_ws_tickets,
 )
+from awiki_open_server.user_compat.server_info import server_info as user_compat_server_info
 
 
 def _http_error(exc: Exception) -> HTTPException:
@@ -185,6 +186,11 @@ def mount_routes(app: FastAPI) -> None:
     @app.post("/user-service/message-agent/rpc")
     async def message_agent_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, MESSAGE_AGENT_HANDLERS)
+
+    @app.get("/server-info")
+    @app.get("/user-service/server-info")
+    async def server_info(request: Request):
+        return user_compat_server_info(request)
 
     async def im_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, MESSAGE_HANDLERS)
