@@ -12,7 +12,7 @@ Step index：04
 | Branch | `main` |
 | Started | 2026-07-10T11:18:51Z |
 | Completed | 2026-07-10T11:30:51Z |
-| Commit | 提交后回填 |
+| Commit | `2a75e5b` (`identity: harden DID auth token lifecycle`) |
 | Review evidence | L3 Review 完成：DID/domain/e1、uploaded proof policy、token expiry/rotation、contact verification 默认禁用、public allowlist 和 token logging 均已检查；剩余风险是用户 DID document proof 只做结构校验，不做 DataIntegrity/JCS cryptographic verification。 |
 | Verification evidence | identity focused 20 passed；route/auth focused 4 passed, 2 skipped；`smoke-cross-domain-local` pass；full local tests 70 passed, 2 skipped；`git diff --check` pass。 |
 | Next action | 创建 Step 04 聚焦 commit，然后启动 Step 05 |
@@ -137,7 +137,7 @@ Step index：04
 - Commit 时机：实现、验证、L3 Review 完成后。
 - Commit 范围：DID/auth/token 相关代码、tests、必要 docs。
 - Commit 前状态：`main...origin/main [ahead 5]`，Step 04 文件已修改，`git diff --check` pass。
-- Commit 后证据：提交后回填 commit hash 和 commit 后状态。
+- Commit 后证据：`2a75e5b`；提交后状态 `main...origin/main [ahead 6]`，工作区干净。
 - 建议消息：`identity: harden DID auth token lifecycle`。
 
 ## 11. Blocked 处理
