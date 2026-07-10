@@ -26,6 +26,16 @@ def _sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def _handle_not_found(handle: str | None = None) -> NotFound:
+    data: dict[str, Any] = {
+        "code": "handle_not_found",
+        "resource": "handle",
+    }
+    if handle:
+        data["handle"] = handle
+    return NotFound("handle_not_found", data=data)
+
+
 def _parse_time(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
@@ -311,7 +321,7 @@ def recover_handle(params: dict[str, Any], request: Request) -> dict[str, Any]:
             (stored_handle,),
         ).fetchone()
         if not row:
-            raise NotFound("handle_not_found")
+            raise _handle_not_found(stored_handle)
 
         old_did = str(row["did"])
         did_owner = conn.execute("SELECT did, handle FROM users WHERE did = ?", (did,)).fetchone()
@@ -881,7 +891,7 @@ def handle_lookup(params: dict[str, Any], request: Request) -> dict[str, Any]:
             from awiki_open_server.user_compat.wns import resolve_handle_anywhere
 
             return resolve_handle_anywhere(str(handle), request).lookup_view()
-        raise NotFound("handle_not_found")
+        raise _handle_not_found(str(handle) if handle else str(did) if did else None)
     profile = dict(row)
     local, domain, _, full = _split_handle(profile["handle"], settings.did_domain)
     return {
@@ -940,7 +950,7 @@ def handle_resolution_document(local_part: str, request: Request) -> dict[str, A
             (stored_handle,),
         ).fetchone()
     if not row:
-        raise NotFound("handle_not_found")
+        raise _handle_not_found(stored_handle)
     return _handle_document_from_profile(dict(row), settings)
 
 

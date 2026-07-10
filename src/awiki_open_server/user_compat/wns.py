@@ -116,7 +116,14 @@ def publish_local_handle(local_part: str, request: Request) -> dict[str, Any]:
             (stored_handle,),
         ).fetchone()
     if not row:
-        raise NotFound("handle_not_found")
+        raise NotFound(
+            "handle_not_found",
+            data={
+                "code": "handle_not_found",
+                "resource": "handle",
+                "handle": f"{local}.{settings.did_domain}",
+            },
+        )
     return local_handle_document(dict(row), settings)
 
 
@@ -143,7 +150,14 @@ def resolve_handle_anywhere(handle: str, request: Request) -> WnsResolution:
     if local_resolution is not None:
         return local_resolution
     if domain == settings.did_domain.lower():
-        raise NotFound("handle_not_found")
+        raise NotFound(
+            "handle_not_found",
+            data={
+                "code": "handle_not_found",
+                "resource": "handle",
+                "handle": full_handle,
+            },
+        )
     return _resolve_remote_handle(local, domain, full_handle, request)
 
 

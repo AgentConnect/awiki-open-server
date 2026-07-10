@@ -152,3 +152,19 @@ async def test_users_rpc_compat_routes(client):
     missing = await rpc(client, "/users/rpc", "get_by_did", {"did": "did:wba:testserver:users:nope"}, token=alice_token)
     assert missing["error"]["message"] == "profile_not_found"
 
+
+@pytest.mark.asyncio
+async def test_public_profile_missing_handle_returns_machine_readable_error(client):
+    missing = await rpc(
+        client,
+        "/user-service/did/profile/rpc",
+        "get_public_profile",
+        {"handle": "missing-profile.testserver"},
+    )
+
+    assert missing["error"]["message"] == "handle_not_found"
+    assert missing["error"]["data"] == {
+        "code": "handle_not_found",
+        "resource": "handle",
+        "handle": "missing-profile.testserver",
+    }
