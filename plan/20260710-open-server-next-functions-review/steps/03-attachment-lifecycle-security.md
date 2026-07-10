@@ -12,7 +12,7 @@ Step index：03
 | Branch | `main` |
 | Started | 2026-07-10T11:09:52Z |
 | Completed | 2026-07-10T11:15:57Z |
-| Commit | 待提交：`attachments: enforce object lifecycle checks` |
+| Commit | `0520718` (`attachments: enforce object lifecycle checks`) |
 | Review evidence | slot expected metadata、upload/commit expiry、size/digest/MIME/max bytes、download ticket expiry、cleanup helper、HTTP 错误映射和 Community 非目标边界已复核；新增配置文档同步留给 Step 06。 |
 | Verification evidence | `tests/test_attachments.py` 6 passed；`tests/test_direct_messages.py tests/test_group_participant.py` 19 passed；`smoke-asgi --data-dir .awiki-open-server/attachment-asgi` pass；`tests -q` 68 passed, 2 skipped；`git diff --check` pass。 |
 | Next action | 启动 Step 04 DID/Auth 注册 proof 与 token 生命周期硬化 |
@@ -130,7 +130,7 @@ Step index：03
 - Commit 时机：实现、验证、Review 完成后。
 - Commit 范围：attachment lifecycle/security 相关代码、tests、必要 docs。
 - Commit 前状态：`## main...origin/main [ahead 3]`，修改 `plan/20260710-open-server-next-functions-review/plan.md`、`plan/20260710-open-server-next-functions-review/steps/03-attachment-lifecycle-security.md`、`src/awiki_open_server/app/routes.py`、`src/awiki_open_server/app/settings.py`、`src/awiki_open_server/attachments/core.py`、`src/awiki_open_server/storage/db.py`、`tests/test_attachments.py`。
-- Commit 后证据：提交后回填 commit hash 和 commit 后状态。
+- Commit 后证据：功能提交 `0520718`；提交后 `git status --short --branch` 为 `## main...origin/main [ahead 4]`，工作区 clean。
 - 建议消息：`attachments: enforce object lifecycle checks`。
 
 ## 11. Blocked 处理
