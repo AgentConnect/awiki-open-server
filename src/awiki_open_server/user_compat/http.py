@@ -6,7 +6,9 @@ from typing import Any
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .core import bearer_token, did_for_token, get_store, register
+from awiki_open_server.shared.errors import InvalidParams, Unauthorized
+
+from .core import bearer_token, did_for_token, get_store, refresh_access_token, register
 
 
 def identity_headers(did: str) -> dict[str, str]:
@@ -44,6 +46,7 @@ async def sms_login(request: Request) -> dict[str, Any]:
     settings = contact_verification_settings(request)
     payload = await request.json()
     token = payload.get("token") or payload.get("access_token")
+    refresh_token = None
     did = did_for_token(request, str(token)) if token else None
     if not did:
         otp = str(payload.get("otp") or payload.get("otp_code") or payload.get("code") or "")
@@ -55,7 +58,7 @@ async def sms_login(request: Request) -> dict[str, Any]:
             revoked_row = conn.execute("SELECT revoked_at FROM users WHERE handle = ?", (stored_handle,)).fetchone()
             row = conn.execute(
                 """
-                SELECT u.did, u.token
+                SELECT u.did, u.token, u.refresh_token
                 FROM users u
                 LEFT JOIN did_documents d ON d.did = u.did
                 WHERE u.handle = ?
@@ -68,6 +71,7 @@ async def sms_login(request: Request) -> dict[str, Any]:
         if row:
             did = str(row["did"])
             token = str(row["token"])
+            refresh_token = str(row["refresh_token"] or row["token"])
         elif revoked_row:
             raise HTTPException(status_code=401, detail="did_revoked")
         else:
@@ -80,11 +84,14 @@ async def sms_login(request: Request) -> dict[str, Any]:
             )
             did = registered["did"]
             token = registered["token"]
+            refresh_token = registered["refresh_token"]
+    if refresh_token is None:
+        refresh_token = token
     return {
         "ok": True,
         "access_token": token,
         "token": token,
-        "refresh_token": token,
+        "refresh_token": refresh_token,
         "did": did,
         "user_id": did,
         "provider": "dev",
@@ -141,11 +148,11 @@ async def phone_bind_verify(request: Request) -> dict[str, Any]:
 
 async def token_refresh(request: Request) -> dict[str, Any]:
     payload = await request.json()
-    token = payload.get("refresh_token") or payload.get("token") or payload.get("access_token")
-    did = did_for_token(request, str(token)) if token else None
-    if not did:
+    try:
+        result = refresh_access_token(payload, request)
+    except (InvalidParams, Unauthorized):
         raise HTTPException(status_code=401, detail="invalid_token")
-    return {"ok": True, "access_token": token, "token": token, "refresh_token": token, "did": did}
+    return {"ok": True, **result}
 
 
 async def token_verify(request: Request, token: str | None = None) -> JSONResponse:

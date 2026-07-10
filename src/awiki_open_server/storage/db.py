@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS users (
   did TEXT PRIMARY KEY,
   handle TEXT UNIQUE NOT NULL,
   token TEXT UNIQUE NOT NULL,
+  refresh_token TEXT UNIQUE,
+  access_expires_at TEXT,
+  refresh_expires_at TEXT,
   created_at TEXT NOT NULL,
   revoked_at TEXT
 );
@@ -215,6 +218,9 @@ class Store:
             self.ensure_column(conn, "direct_messages", "operation_id", "TEXT")
             self.ensure_column(conn, "group_messages", "content_type", "TEXT NOT NULL DEFAULT 'text/plain'")
             self.ensure_column(conn, "group_messages", "operation_id", "TEXT")
+            self.ensure_column(conn, "users", "refresh_token", "TEXT")
+            self.ensure_column(conn, "users", "access_expires_at", "TEXT")
+            self.ensure_column(conn, "users", "refresh_expires_at", "TEXT")
             self.ensure_column(conn, "attachment_slots", "attachment_id", "TEXT")
             self.ensure_column(conn, "attachment_slots", "object_uri", "TEXT")
             self.ensure_column(conn, "attachment_slots", "expected_size", "INTEGER")

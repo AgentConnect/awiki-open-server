@@ -19,8 +19,18 @@ async def register(client, handle: str):
 
 
 async def register_with_key(client, handle: str):
-    did = f"did:wba:testserver:users:{handle}"
+    did = f"did:wba:testserver:users:{handle}:e1_default"
     private_key, document = did_keypair_document(did)
+    document["service"][0]["serviceEndpoint"] = "http://testserver/anp-im/rpc"
+    document["service"][0]["serviceDid"] = "did:wba:testserver"
+    document["proof"] = {
+        "type": "DataIntegrityProof",
+        "created": "2026-07-10T00:00:00Z",
+        "verificationMethod": f"{did}#key-1",
+        "proofPurpose": "assertionMethod",
+        "cryptosuite": "eddsa-jcs-2022",
+        "proofValue": "test-proof-value",
+    }
     data = await rpc(client, "/did-auth/rpc", "register", {"handle": handle, "did_document": document})
     return data["result"]["did"], data["result"]["token"], private_key, document
 

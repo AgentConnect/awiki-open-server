@@ -65,7 +65,7 @@ def rpc_payload(base_url: str, path: str, payload_obj: dict, token: str | None =
 
 
 def anp_params(method: str, args: argparse.Namespace, body: dict | None = None) -> dict:
-    sender_did = args.sender_did or f"did:wba:{args.did_domain}:users:smoke"
+    sender_did = args.sender_did or f"did:wba:{args.did_domain}:users:smoke:e1_default"
     content_type = "text/plain" if method == "direct.send" else "application/json"
     meta: dict = {
         "anp_version": "1.0",
@@ -167,6 +167,14 @@ def user_did_document(did: str, service_endpoint: str, service_did: str, key: ed
                 "securityProfiles": ["transport-protected"],
             }
         ],
+        "proof": {
+            "type": "DataIntegrityProof",
+            "created": "2026-07-10T00:00:00Z",
+            "verificationMethod": key_id,
+            "proofPurpose": "assertionMethod",
+            "cryptosuite": "eddsa-jcs-2022",
+            "proofValue": "test-proof-value",
+        },
     }
 
 
@@ -607,8 +615,8 @@ def smoke_cross_domain_local(args: argparse.Namespace) -> int:
         target_user_key = ed25519.Ed25519PrivateKey.generate()
         source_handle = unique_handle(args.source_handle)
         target_handle = unique_handle(args.target_handle)
-        source_did = f"did:wba:{source_domain}:users:{source_handle}"
-        target_did = f"did:wba:{target_domain}:users:{target_handle}"
+        source_did = f"did:wba:{source_domain}:users:{source_handle}:e1_default"
+        target_did = f"did:wba:{target_domain}:users:{target_handle}:e1_default"
         source_user = rpc(
             source_base,
             "/did-auth/rpc",

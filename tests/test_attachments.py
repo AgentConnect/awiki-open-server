@@ -50,7 +50,7 @@ async def test_attachment_roundtrip(client):
     assert ticket["result"]["download_uri"] == ticket["result"]["download_url"]
     assert ticket["result"]["download_headers"]["Authorization"] == f"Bearer {ticket['result']['ticket']}"
     assert ticket["result"]["download_ticket_b64u"] == ticket["result"]["ticket"]
-    assert ticket["result"]["ticket_binding"]["requester_did"] == "did:wba:testserver:users:carol"
+    assert ticket["result"]["ticket_binding"]["requester_did"] == "did:wba:testserver:users:carol:e1_default"
     download = await client.get(f"/objects/{object_id}", params={"ticket": ticket["result"]["ticket"]})
     assert download.status_code == 200
     assert download.content == b"hello file"

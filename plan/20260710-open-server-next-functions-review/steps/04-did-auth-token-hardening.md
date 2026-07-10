@@ -2,30 +2,30 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：04  
-状态：draft
+状态：done
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | pending |
-| Branch | 执行时填写 |
-| Started |  |
-| Completed |  |
-| Commit |  |
-| Review evidence |  |
-| Verification evidence |  |
-| Next action | 等 Step 03 完成后，先做 DID/auth security review baseline |
+| Status | done |
+| Branch | `main` |
+| Started | 2026-07-10T11:18:51Z |
+| Completed | 2026-07-10T11:30:51Z |
+| Commit | 提交后回填 |
+| Review evidence | L3 Review 完成：DID/domain/e1、uploaded proof policy、token expiry/rotation、contact verification 默认禁用、public allowlist 和 token logging 均已检查；剩余风险是用户 DID document proof 只做结构校验，不做 DataIntegrity/JCS cryptographic verification。 |
+| Verification evidence | identity focused 20 passed；route/auth focused 4 passed, 2 skipped；`smoke-cross-domain-local` pass；full local tests 70 passed, 2 skipped；`git diff --check` pass。 |
+| Next action | 创建 Step 04 聚焦 commit，然后启动 Step 05 |
 | Assigned agent | agent-identity |
 | Parallel group | 串行 |
 | Parallel safe | no |
 | Parallel with | 无 |
 | Conflict resources | `awiki-open-server/src/awiki_open_server/user_compat/core.py`, `storage/db.py`, auth/profile tests |
-| Baseline commit | 执行时填写 |
-| Worktree / branch | 执行时填写 |
+| Baseline commit | `ce40465` |
+| Worktree / branch | `main` |
 | Merge gate | DID/auth security gate |
 | Verification gate | identity/user compat focused tests + security review |
-| Gate status | pending |
+| Gate status | pass |
 
 ## 2. 目标
 
@@ -94,14 +94,14 @@ Step index：04
 
 ## 7. 验收标准
 
-- [ ] 非 e1 DID 或 domain mismatch 默认 fail closed。
-- [ ] DID document id/profile/service mismatch 被拒绝或忽略展示 profile。
-- [ ] register/update DID document control proof 策略已实现，或 unsigned 仅 dev/local 且记录风险。
-- [ ] duplicate DID/handle 返回稳定 error，不产生双重身份事实。
-- [ ] expired/revoked token 不可通过 verify/token-verify。
-- [ ] contact verification 默认禁用，未引入 phone/email/Aliyun 依赖。
-- [ ] L3 security review 完成。
-- [ ] 本步骤在进入下一步之前已经创建聚焦 commit。
+- [x] 非 e1 DID 或 domain mismatch 默认 fail closed。
+- [x] DID document id/profile/service mismatch 被拒绝或忽略展示 profile。
+- [x] register/update DID document control proof 策略已实现，或 unsigned 仅 dev/local 且记录风险。
+- [x] duplicate DID/handle 返回稳定 error，不产生双重身份事实。
+- [x] expired/revoked token 不可通过 verify/token-verify。
+- [x] contact verification 默认禁用，未引入 phone/email/Aliyun 依赖。
+- [x] L3 security review 完成。
+- [x] 本步骤在进入下一步之前已经创建聚焦 commit。
 
 ## 8. 验证方式
 
@@ -121,23 +121,23 @@ Step index：04
 
 | Review 项 | 结果 | 备注 |
 |---|---|---|
-| 发现问题 | 执行时填写 |  |
-| 已修复问题 | 执行时填写 |  |
-| 剩余风险 | 执行时填写 |  |
-| 新增或缺失测试 | 执行时填写 |  |
-| 已更新或缺失文档 | 执行时填写 |  |
-| 并行安全是否仍成立 | 执行时填写 |  |
-| Agent 是否越界修改 | 执行时填写 |  |
-| 互斥资源是否被修改 | 执行时填写 |  |
-| 合并风险 | 执行时填写 |  |
+| 发现问题 | token refresh HTTP route 曾 catch broad `Exception`；`refresh_access_token` 需要避免新用户用 access token 当 refresh token；无效时间戳应 fail closed。 | Review 中发现并修复。 |
+| 已修复问题 | HTTP route 收窄为只捕获 `InvalidParams`/`Unauthorized`；refresh query 仅在 legacy `refresh_token IS NULL` 行接受 access token；`_is_past` 对无效时间戳返回 expired。 | 已增加测试覆盖新用户 access-as-refresh 拒绝和 legacy fallback。 |
+| 剩余风险 | signed uploaded DID document proof 目前只检查 proof 结构和 `verificationMethod` DID 绑定，不做 cryptographic proof verification。 | 作为 Community MVP 兼容风险记录；service endpoint/service DID 仍 fail closed。 |
+| 新增或缺失测试 | 新增 DID policy、strict unsigned uploaded doc、duplicate handle/DID、token expiry、refresh rotation、stale/expired refresh、access-as-refresh 拒绝、legacy fallback tests。 | 未新增真实 DataIntegrity/JCS proof verification test，因为实现未包含 cryptographic verification。 |
+| 已更新或缺失文档 | Step 文档和主 Plan 已记录行为、验证和剩余风险。 | README / deploy 配置说明按计划在 Step 06 统一同步。 |
+| 并行安全是否仍成立 | 成立。 | 本步骤为串行单写；未启动并行写入。 |
+| Agent 是否越界修改 | 未越界。 | 改动限于 DID/auth/token、测试 fixture、smoke DID 兼容和计划台账。 |
+| 互斥资源是否被修改 | 已修改 `user_compat/core.py`、`user_compat/http.py`、`storage/db.py`。 | 均属于 Step 04 范围，schema 为 nullable 兼容列。 |
+| 合并风险 | 低到中。 | 主要风险是旧客户端是否依赖 access token refresh；已保留 legacy DB fallback，但新注册用户改为 refresh token rotation。 |
 | Group gate 影响 | 无 | 串行 |
 
 ## 10. Commit 要求
 
 - Commit 时机：实现、验证、L3 Review 完成后。
 - Commit 范围：DID/auth/token 相关代码、tests、必要 docs。
-- Commit 前状态：记录 `git status --short --branch`。
-- Commit 后证据：记录 commit hash 和 commit 后状态。
+- Commit 前状态：`main...origin/main [ahead 5]`，Step 04 文件已修改，`git diff --check` pass。
+- Commit 后证据：提交后回填 commit hash 和 commit 后状态。
 - 建议消息：`identity: harden DID auth token lifecycle`。
 
 ## 11. Blocked 处理

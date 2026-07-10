@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 
+from awiki_open_server.app.main import create_app
+from awiki_open_server.app.settings import Settings
+from awiki_open_server.service_identity import generate_ed25519_private_key_pem
 from tests.conftest import rpc
 
 @pytest.mark.asyncio
@@ -33,7 +37,7 @@ async def test_register_profile_and_page(client):
     renamed = await rpc(client, "/content/rpc", "rename", {"old_slug": "intro", "new_slug": "about"}, token=token)
     assert renamed["result"]["slug"] == "about"
 
-    resolved = await client.get("/dids/resolve/users/alice/did.json")
+    resolved = await client.get("/dids/resolve/users/alice/e1_default/did.json")
     assert resolved.status_code == 200
     assert resolved.json()["id"] == result["did"]
 
@@ -105,6 +109,74 @@ async def test_user_service_identity_compat_path_accepts_cli_did_document(client
 
 
 @pytest.mark.asyncio
+async def test_did_registration_policy_rejects_non_e1_domain_conflicts_and_public_unsigned_doc(client, tmp_path):
+    non_e1 = await rpc(
+        client,
+        "/did-auth/rpc",
+        "register",
+        {"handle": "policy-non-e1", "did_document": {"id": "did:wba:testserver:users:policy-non-e1", "service": []}},
+    )
+    assert non_e1["error"]["message"] == "did_e1_required"
+
+    domain_mismatch = await rpc(
+        client,
+        "/did-auth/rpc",
+        "register",
+        {"handle": "policy-domain", "did_document": {"id": "did:wba:other.example:users:policy:e1_default", "service": []}},
+    )
+    assert domain_mismatch["error"]["message"] == "did_domain_mismatch"
+
+    k1_input = await rpc(
+        client,
+        "/did-auth/rpc",
+        "register",
+        {"handle": "policy-k1", "did_document": {"id": "did:wba:testserver:users:policy:k1_main", "service": []}},
+    )
+    assert k1_input["error"]["message"] == "did_e1_required"
+
+    first = await rpc(
+        client,
+        "/did-auth/rpc",
+        "register",
+        {"handle": "policy-ok", "did_document": {"id": "did:wba:testserver:users:policy-ok:e1_default", "service": []}},
+    )
+    duplicate_handle = await rpc(client, "/did-auth/rpc", "register", {"handle": "policy-ok"})
+    assert duplicate_handle["error"]["message"] == "handle_already_registered"
+    assert duplicate_handle["error"]["data"]["handle"] == "policy-ok@testserver"
+
+    duplicate_did = await rpc(
+        client,
+        "/did-auth/rpc",
+        "register",
+        {"handle": "policy-other", "did_document": {"id": first["result"]["did"], "service": []}},
+    )
+    assert duplicate_did["error"]["message"] == "did_already_registered"
+
+    strict_app = create_app(
+        Settings(
+            data_dir=tmp_path,
+            public_base_url="http://testserver",
+            service_did="did:wba:testserver",
+            did_domain="testserver",
+            service_private_key_pem=generate_ed25519_private_key_pem(),
+            allow_unsigned_peer_dev=False,
+        )
+    )
+    transport = httpx.ASGITransport(app=strict_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as strict_client:
+        unsigned = await rpc(
+            strict_client,
+            "/did-auth/rpc",
+            "register",
+            {"handle": "strict-unsigned", "did_document": {"id": "did:wba:testserver:users:strict-unsigned:e1_default", "service": []}},
+        )
+        assert unsigned["error"]["message"] == "unsigned_did_document_requires_dev_mode"
+
+        generated = await rpc(strict_client, "/did-auth/rpc", "register", {"handle": "strict-generated"})
+        assert generated["result"]["did"] == "did:wba:testserver:users:strict-generated:e1_default"
+
+
+@pytest.mark.asyncio
 async def test_signed_cli_did_document_service_is_not_rewritten(client):
     did = "did:wba:testserver:signed-cli:e1_cli"
     service = {
@@ -137,7 +209,7 @@ async def test_signed_cli_did_document_service_is_not_rewritten(client):
 
     signed_without_service = {
         "id": "did:wba:testserver:signed-empty:e1_empty",
-        "proof": document["proof"],
+        "proof": {**document["proof"], "verificationMethod": "did:wba:testserver:signed-empty:e1_empty#key-1"},
     }
     rejected = await rpc(
         client,
@@ -215,6 +287,76 @@ async def test_signed_cli_did_document_service_must_match_open_server(client):
 
 
 @pytest.mark.asyncio
+async def test_token_lifecycle_expires_rotates_and_rejects_stale_refresh(tmp_path):
+    app = create_app(
+        Settings(
+            data_dir=tmp_path,
+            public_base_url="http://testserver",
+            service_did="did:wba:testserver",
+            did_domain="testserver",
+            service_private_key_pem=generate_ed25519_private_key_pem(),
+            allow_unsigned_peer_dev=True,
+        )
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as token_client:
+        registered = await rpc(token_client, "/did-auth/rpc", "register", {"handle": "token-life"})
+        did = registered["result"]["did"]
+        token = registered["result"]["token"]
+        refresh_token = registered["result"]["refresh_token"]
+
+        access_as_refresh = await token_client.post("/user-service/auth/token-refresh", json={"refresh_token": token})
+        assert access_as_refresh.status_code == 401
+
+        with app.state.store.connect() as conn:
+            conn.execute(
+                "UPDATE users SET access_expires_at = ? WHERE did = ?",
+                ("2000-01-01T00:00:00+00:00", did),
+            )
+
+        expired_verify = await rpc(token_client, "/did-auth/rpc", "verify", token=token)
+        assert expired_verify["error"]["message"] == "invalid_bearer_token"
+        token_verify = await token_client.get("/user-service/auth/token-verify", headers={"Authorization": f"Bearer {token}"})
+        assert token_verify.status_code == 401
+        assert token_verify.json()["detail"] == "invalid_token"
+
+        refreshed = await token_client.post("/user-service/auth/token-refresh", json={"refresh_token": refresh_token})
+        assert refreshed.status_code == 200
+        new_token = refreshed.json()["access_token"]
+        new_refresh = refreshed.json()["refresh_token"]
+        assert new_token != token
+        assert new_refresh != refresh_token
+
+        old_refresh = await token_client.post("/user-service/auth/token-refresh", json={"refresh_token": refresh_token})
+        assert old_refresh.status_code == 401
+
+        verify_new = await rpc(token_client, "/did-auth/rpc", "verify", token=new_token)
+        assert verify_new["result"]["did"] == did
+
+        with app.state.store.connect() as conn:
+            conn.execute(
+                "UPDATE users SET refresh_expires_at = ? WHERE did = ?",
+                ("2000-01-01T00:00:00+00:00", did),
+            )
+        expired_refresh = await token_client.post("/user-service/auth/token-refresh", json={"refresh_token": new_refresh})
+        assert expired_refresh.status_code == 401
+        assert expired_refresh.json()["detail"] == "invalid_token"
+
+        legacy = await rpc(token_client, "/did-auth/rpc", "register", {"handle": "legacy-token-life"})
+        legacy_token = legacy["result"]["token"]
+        legacy_did = legacy["result"]["did"]
+        with app.state.store.connect() as conn:
+            conn.execute(
+                "UPDATE users SET refresh_token = NULL, refresh_expires_at = NULL WHERE did = ?",
+                (legacy_did,),
+            )
+        legacy_refresh = await token_client.post("/user-service/auth/token-refresh", json={"refresh_token": legacy_token})
+        assert legacy_refresh.status_code == 200
+        assert legacy_refresh.json()["did"] == legacy_did
+        assert legacy_refresh.json()["access_token"] != legacy_token
+
+
+@pytest.mark.asyncio
 async def test_did_auth_revoke_marks_did_inactive_and_blocks_auth_paths(client):
     registered = await rpc(client, "/did-auth/rpc", "register", {"handle": "revoked-user"})
     token = registered["result"]["token"]
@@ -266,7 +408,7 @@ async def test_did_auth_revoke_marks_did_inactive_and_blocks_auth_paths(client):
     did_verify_refresh = await rpc(client, "/user-service/did-verify/rpc", "refresh", {"refresh_token": token})
     assert did_verify_refresh["error"]["message"] == "invalid_refresh_token"
 
-    resolved = await client.get("/dids/resolve/users/revoked-user/did.json")
+    resolved = await client.get("/dids/resolve/users/revoked-user/e1_default/did.json")
     assert resolved.status_code == 404
 
     handle_lookup = await rpc(client, "/user-service/handle/rpc", "lookup", {"handle": "revoked-user.testserver"})
@@ -314,4 +456,3 @@ async def test_unsupported_identity_methods(client):
     reg = await rpc(client, "/did-auth/rpc", "register", {"handle": "bob"})
     response = await rpc(client, "/did-auth/rpc", "recover_handle", token=reg["result"]["token"])
     assert response["error"]["message"] == "not_supported"
-

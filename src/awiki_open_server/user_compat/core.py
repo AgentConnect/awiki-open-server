@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import Request
 
 from awiki_open_server.app.settings import Settings
-from awiki_open_server.shared.errors import InvalidParams, NotFound, NotSupported, Unauthorized
+from awiki_open_server.shared.errors import Conflict, InvalidParams, NotFound, NotSupported, Unauthorized
 from awiki_open_server.shared.ids import new_id, now_iso
 from awiki_open_server.storage.db import Store
 
@@ -28,6 +28,54 @@ def _sha256_hex(value: str) -> str:
 
 def _parse_time(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+ACCESS_TOKEN_TTL_SECONDS = 3600
+REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 3600
+
+
+def _future_iso(seconds: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+
+
+def _is_past(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        return _parse_time(value) <= datetime.now(timezone.utc)
+    except ValueError:
+        return True
+
+
+def _did_parts(did: str) -> list[str]:
+    return did.split(":")
+
+
+def _did_domain(did: str) -> str | None:
+    parts = _did_parts(did)
+    if len(parts) < 3 or parts[0] != "did" or parts[1] != "wba":
+        return None
+    return parts[2].lower()
+
+
+def _is_e1_did(did: str) -> bool:
+    return any(part.startswith("e1_") for part in _did_parts(did)[3:])
+
+
+def _default_user_did(settings: Settings, local_handle: str) -> str:
+    return f"did:wba:{settings.did_domain}:users:{local_handle}:e1_default"
+
+
+def _validate_local_user_did(did: str, settings: Settings) -> str:
+    value = str(did or "").strip()
+    if not value.startswith("did:wba:"):
+        raise InvalidParams("valid_did_required")
+    domain = _did_domain(value)
+    if domain != settings.did_domain.lower():
+        raise InvalidParams("did_domain_mismatch", data={"expected": settings.did_domain, "actual": domain})
+    if not _is_e1_did(value):
+        raise InvalidParams("did_e1_required")
+    return value
 
 
 def get_store(request: Request) -> Store:
@@ -70,7 +118,7 @@ def did_for_token(request: Request, token: str) -> str | None:
     with get_store(request).connect() as conn:
         row = conn.execute(
             """
-            SELECT u.did
+            SELECT u.did, u.access_expires_at
             FROM users u
             JOIN did_documents d ON d.did = u.did
             WHERE u.token = ?
@@ -81,6 +129,8 @@ def did_for_token(request: Request, token: str) -> str | None:
             (token,),
         ).fetchone()
     if row:
+        if _is_past(row["access_expires_at"]):
+            return None
         return str(row["did"])
     if token.startswith("did:") and _is_active_did(request, token):
         return token
@@ -129,6 +179,10 @@ def _ensure_anp_message_service(document: dict[str, Any], settings: Settings, di
     if isinstance(doc.get("proof"), dict):
         if doc.get("id") != did:
             raise InvalidParams("did_document_id_mismatch", data={"did": did, "document_id": doc.get("id")})
+        proof = doc["proof"]
+        verification_method = proof.get("verificationMethod")
+        if not isinstance(verification_method, str) or not verification_method.startswith(f"{did}#"):
+            raise InvalidParams("did_document_proof_verification_method_mismatch")
         services = _anp_message_services(doc)
         if not services:
             raise InvalidParams("signed_did_document_requires_anp_message_service")
@@ -224,6 +278,89 @@ def not_supported(params: dict[str, Any], request: Request) -> None:
     raise NotSupported("not_supported", data={"upgrade": "commercial", "params": params})
 
 
+def _token_payload(
+    *,
+    did: str,
+    access_token: str,
+    refresh_token: str,
+    access_expires_at: str,
+    refresh_expires_at: str,
+    refreshed: bool = False,
+) -> dict[str, Any]:
+    return {
+        "access_token": access_token,
+        "token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "Bearer",
+        "expires_in": ACCESS_TOKEN_TTL_SECONDS,
+        "expires_at": access_expires_at,
+        "refresh_expires_at": refresh_expires_at,
+        "did": did,
+        "user_id": did,
+        "refreshed": refreshed,
+    }
+
+
+def _rotate_tokens_for_did(request: Request, did: str) -> dict[str, Any]:
+    access_token = new_id("tok")
+    refresh_token = new_id("rtok")
+    access_expires_at = _future_iso(ACCESS_TOKEN_TTL_SECONDS)
+    refresh_expires_at = _future_iso(REFRESH_TOKEN_TTL_SECONDS)
+    with get_store(request).connect() as conn:
+        row = conn.execute(
+            """
+            SELECT u.did
+            FROM users u
+            JOIN did_documents d ON d.did = u.did
+            WHERE u.did = ?
+              AND u.revoked_at IS NULL
+              AND d.status = 'active'
+              AND d.revoked_at IS NULL
+            """,
+            (did,),
+        ).fetchone()
+        if not row:
+            raise Unauthorized("did_not_found")
+        conn.execute(
+            """
+            UPDATE users
+            SET token = ?, refresh_token = ?, access_expires_at = ?, refresh_expires_at = ?
+            WHERE did = ?
+            """,
+            (access_token, refresh_token, access_expires_at, refresh_expires_at, did),
+        )
+    return _token_payload(
+        did=did,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        access_expires_at=access_expires_at,
+        refresh_expires_at=refresh_expires_at,
+        refreshed=True,
+    )
+
+
+def refresh_access_token(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    raw = str(params.get("refresh_token") or params.get("token") or params.get("access_token") or "").strip()
+    if not raw:
+        raise InvalidParams("refresh_token_required")
+    with get_store(request).connect() as conn:
+        row = conn.execute(
+            """
+            SELECT u.did, u.refresh_expires_at
+            FROM users u
+            JOIN did_documents d ON d.did = u.did
+            WHERE (u.refresh_token = ? OR (u.refresh_token IS NULL AND u.token = ?))
+              AND u.revoked_at IS NULL
+              AND d.status = 'active'
+              AND d.revoked_at IS NULL
+            """,
+            (raw, raw),
+        ).fetchone()
+    if not row or _is_past(row["refresh_expires_at"]):
+        raise Unauthorized("invalid_refresh_token")
+    return _rotate_tokens_for_did(request, str(row["did"]))
+
+
 def register(params: dict[str, Any], request: Request) -> dict[str, Any]:
     settings = get_settings(request)
     raw_handle = params.get("handle") or f"user-{new_id('h')[2:8]}"
@@ -231,15 +368,32 @@ def register(params: dict[str, Any], request: Request) -> dict[str, Any]:
     full_handle = str(raw_handle) if ("@" in str(raw_handle) or "." in str(raw_handle)) else f"{local_handle}.{settings.did_domain}"
     stored_handle = str(raw_handle) if "@" in str(raw_handle) else f"{local_handle}@{settings.did_domain}"
     uploaded_doc = params.get("did_document") if isinstance(params.get("did_document"), dict) else None
-    did = params.get("did") or (uploaded_doc or {}).get("id") or f"did:wba:{settings.did_domain}:users:{local_handle}"
+    if uploaded_doc and not isinstance(uploaded_doc.get("proof"), dict) and not settings.allow_unsigned_peer_dev:
+        raise InvalidParams("unsigned_did_document_requires_dev_mode")
+    did = params.get("did") or (uploaded_doc or {}).get("id") or _default_user_did(settings, local_handle)
+    did = _validate_local_user_did(str(did), settings)
+    if uploaded_doc and uploaded_doc.get("id") not in (None, did):
+        raise InvalidParams("did_document_id_mismatch", data={"did": did, "document_id": uploaded_doc.get("id")})
     display_name = params.get("display_name") or local_handle
     token = new_id("tok")
+    refresh_token = new_id("rtok")
+    access_expires_at = _future_iso(ACCESS_TOKEN_TTL_SECONDS)
+    refresh_expires_at = _future_iso(REFRESH_TOKEN_TTL_SECONDS)
     doc = _ensure_anp_message_service(uploaded_doc or did_document(settings, did, stored_handle), settings, did)
     doc["id"] = did
     with get_store(request).connect() as conn:
+        existing_handle = conn.execute("SELECT did FROM users WHERE handle = ?", (stored_handle,)).fetchone()
+        if existing_handle:
+            raise Conflict("handle_already_registered", data={"handle": stored_handle, "did": existing_handle["did"]})
+        existing_did = conn.execute("SELECT did FROM users WHERE did = ?", (did,)).fetchone()
+        if existing_did:
+            raise Conflict("did_already_registered", data={"did": did})
         conn.execute(
-            "INSERT INTO users(did, handle, token, created_at) VALUES (?, ?, ?, ?)",
-            (did, stored_handle, token, now_iso()),
+            """
+            INSERT INTO users(did, handle, token, refresh_token, access_expires_at, refresh_expires_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (did, stored_handle, token, refresh_token, access_expires_at, refresh_expires_at, now_iso()),
         )
         conn.execute(
             "INSERT INTO profiles(did, handle, display_name, avatar_uri, profile_uri, description, subject_type, profile_md) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -258,6 +412,11 @@ def register(params: dict[str, Any], request: Request) -> dict[str, Any]:
         "full_handle": full_handle,
         "token": token,
         "access_token": token,
+        "refresh_token": refresh_token,
+        "token_type": "Bearer",
+        "expires_in": ACCESS_TOKEN_TTL_SECONDS,
+        "expires_at": access_expires_at,
+        "refresh_expires_at": refresh_expires_at,
         "document": doc,
     }
 
@@ -275,6 +434,7 @@ def verify_http_request(_: dict[str, Any], request: Request) -> dict[str, Any]:
 def update_document(params: dict[str, Any], request: Request) -> dict[str, Any]:
     settings = get_settings(request)
     did = current_did(request)
+    _validate_local_user_did(did, settings)
     document = params.get("document") if isinstance(params.get("document"), dict) else params.get("did_document")
     if not isinstance(document, dict):
         raise InvalidParams("did_document_required")
@@ -319,7 +479,7 @@ def _did_verify_user_row(did: str, request: Request):
     with get_store(request).connect() as conn:
         return conn.execute(
             """
-            SELECT u.did, u.handle, u.token, d.document_json
+            SELECT u.did, u.handle, u.token, u.refresh_token, u.access_expires_at, u.refresh_expires_at, d.document_json
             FROM users u
             JOIN did_documents d ON d.did = u.did
             WHERE u.did = ?
@@ -331,27 +491,12 @@ def _did_verify_user_row(did: str, request: Request):
         ).fetchone()
 
 
-def _did_verify_token_result(*, did: str, token: str, refreshed: bool = False) -> dict[str, Any]:
-    return {
-        "access_token": token,
-        "token": token,
-        "refresh_token": token,
-        "expires_in": 3600,
-        "token_type": "Bearer",
-        "did": did,
-        "user_id": did,
-        "refreshed": refreshed,
-        "provider": "did_verify_dev",
-    }
-
-
 def did_verify_send_code(params: dict[str, Any], request: Request) -> dict[str, Any]:
     did = str(params.get("did") or "").strip()
     if not did:
         raise InvalidParams("did_required")
-    if not did.startswith("did:"):
-        raise InvalidParams("valid_did_required")
     settings = get_settings(request)
+    _validate_local_user_did(did, settings)
     return {
         "message": f"[DEV] Use DID verify code {settings.did_verify_dev_code}",
         "ok": True,
@@ -368,6 +513,7 @@ def did_verify_login(params: dict[str, Any], request: Request) -> dict[str, Any]
     if not did or not code:
         raise InvalidParams("did_and_code_required")
     settings = get_settings(request)
+    _validate_local_user_did(did, settings)
     if code != settings.did_verify_dev_code:
         raise Unauthorized("invalid_code")
     row = _did_verify_user_row(did, request)
@@ -375,20 +521,21 @@ def did_verify_login(params: dict[str, Any], request: Request) -> dict[str, Any]
         raise Unauthorized("did_not_found")
     if not row["document_json"]:
         raise Unauthorized("did_document_not_found")
-    return _did_verify_token_result(did=did, token=str(row["token"]))
+    return {**_rotate_tokens_for_did(request, did), "provider": "did_verify_dev"}
 
 
 def did_verify_refresh(params: dict[str, Any], request: Request) -> dict[str, Any]:
     refresh_token = str(params.get("refresh_token") or "").strip()
     if not refresh_token:
         raise InvalidParams("refresh_token_required")
-    did = did_for_token(request, refresh_token)
-    if not did:
+    try:
+        result = refresh_access_token({"refresh_token": refresh_token}, request)
+    except Unauthorized:
         raise Unauthorized("invalid_refresh_token")
-    row = _did_verify_user_row(did, request)
+    row = _did_verify_user_row(str(result["did"]), request)
     if not row or not row["document_json"]:
         raise Unauthorized("did_document_not_found")
-    return _did_verify_token_result(did=did, token=refresh_token, refreshed=True)
+    return {**result, "provider": "did_verify_dev"}
 
 
 def get_me(_: dict[str, Any], request: Request) -> dict[str, Any]:

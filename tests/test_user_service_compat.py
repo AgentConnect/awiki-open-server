@@ -67,6 +67,7 @@ async def test_user_compat_token_and_ws_ticket_routes(contact_verification_compa
     client = contact_verification_compat_client
     registered = await rpc(client, "/did-auth/rpc", "register", {"handle": "compat-ticket"})
     token = registered["result"]["token"]
+    refresh_token = registered["result"]["refresh_token"]
     did = registered["result"]["did"]
 
     verified = await client.get("/user-service/auth/token-verify", headers={"Authorization": f"Bearer {token}"})
@@ -74,14 +75,16 @@ async def test_user_compat_token_and_ws_ticket_routes(contact_verification_compa
     assert verified.json()["did"] == did
     assert verified.headers["X-DID"] == did
 
-    refreshed = await client.post("/user-service/auth/token-refresh", json={"refresh_token": token})
+    refreshed = await client.post("/user-service/auth/token-refresh", json={"refresh_token": refresh_token})
     assert refreshed.status_code == 200
-    assert refreshed.json()["access_token"] == token
+    assert refreshed.json()["access_token"] != token
+    assert refreshed.json()["refresh_token"] != refresh_token
+    token = refreshed.json()["access_token"]
 
     ticket = await client.post("/user-service/ws/tickets", headers={"Authorization": f"Bearer {token}"})
     assert ticket.status_code == 200
     assert ticket.json()["ticket"] == token
 
-    ticket_verified = await client.get("/user-service/ws/tickets/verify", params={"ticket": token})
+    ticket_verified = await client.get("/user-service/ws/tickets/verify", params={"ticket": ticket.json()["ticket"]})
     assert ticket_verified.status_code == 200
     assert ticket_verified.headers["X-User-Id"] == did

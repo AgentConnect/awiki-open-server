@@ -39,6 +39,7 @@ async def test_legacy_auth_and_ws_ticket_compat_routes(contact_verification_comp
     client = contact_verification_compat_client
     registered = await rpc(client, "/did-auth/rpc", "register", {"handle": "legacy-auth"})
     token = registered["result"]["token"]
+    refresh_token = registered["result"]["refresh_token"]
     did = registered["result"]["did"]
 
     sms_code = await client.post("/user-service/auth/sms-codes", json={"phone": "13800138000"})
@@ -56,7 +57,7 @@ async def test_legacy_auth_and_ws_ticket_compat_routes(contact_verification_comp
     dev_login = await client.post("/user-service/auth/sms", json={"phone": "13800138001", "otp_code": "123456"})
     assert dev_login.status_code == 200
     assert dev_login.json()["access_token"].startswith("tok_")
-    assert dev_login.json()["did"] == "did:wba:testserver:users:13800138001"
+    assert dev_login.json()["did"] == "did:wba:testserver:users:13800138001:e1_default"
 
     dev_login_again = await client.post("/auth/sms", json={"phone": "13800138001", "otp": "123456"})
     assert dev_login_again.status_code == 200
@@ -75,9 +76,11 @@ async def test_legacy_auth_and_ws_ticket_compat_routes(contact_verification_comp
     assert session_verify.status_code == 200
     assert session_verify.headers["X-User-Id"] == did
 
-    refreshed = await client.post("/user-service/auth/token-refresh", json={"refresh_token": token})
+    refreshed = await client.post("/user-service/auth/token-refresh", json={"refresh_token": refresh_token})
     assert refreshed.status_code == 200
-    assert refreshed.json()["access_token"] == token
+    assert refreshed.json()["access_token"] != token
+    assert refreshed.json()["refresh_token"] != refresh_token
+    token = refreshed.json()["access_token"]
 
     ticket = await client.post("/user-service/ws/tickets", headers={"Authorization": f"Bearer {token}"})
     assert ticket.status_code == 200
@@ -109,15 +112,15 @@ async def test_did_verify_rpc_compat_routes(client):
     assert sent["result"]["dev_code"] == "666666"
 
     logged_in = await rpc(client, "/did-verify/rpc", "login", {"did": did, "code": "666666"})
-    assert logged_in["result"]["access_token"] == token
-    assert logged_in["result"]["refresh_token"] == token
+    assert logged_in["result"]["access_token"] != token
+    assert logged_in["result"]["refresh_token"] != registered["result"]["refresh_token"]
     assert logged_in["result"]["token_type"] == "Bearer"
     assert logged_in["result"]["did"] == did
     assert logged_in["result"]["user_id"] == did
 
-    refreshed = await rpc(client, "/user-service/did-verify/rpc", "refresh", {"refresh_token": token})
-    assert refreshed["result"]["access_token"] == token
-    assert refreshed["result"]["refresh_token"] == token
+    refreshed = await rpc(client, "/user-service/did-verify/rpc", "refresh", {"refresh_token": logged_in["result"]["refresh_token"]})
+    assert refreshed["result"]["access_token"] != logged_in["result"]["access_token"]
+    assert refreshed["result"]["refresh_token"] != logged_in["result"]["refresh_token"]
     assert refreshed["result"]["refreshed"] is True
 
     wrong_code = await rpc(client, "/did-verify/rpc", "login", {"did": did, "code": "123456"})
@@ -127,10 +130,9 @@ async def test_did_verify_rpc_compat_routes(client):
         client,
         "/user-service/did-verify/rpc",
         "login",
-        {"did": "did:wba:testserver:users:missing", "code": "666666"},
+        {"did": "did:wba:testserver:users:missing:e1_default", "code": "666666"},
     )
     assert missing_did["error"]["message"] == "did_not_found"
 
     bad_refresh = await rpc(client, "/did-verify/rpc", "refresh", {"refresh_token": "not-a-token"})
     assert bad_refresh["error"]["message"] == "invalid_refresh_token"
-
