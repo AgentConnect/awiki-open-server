@@ -12,7 +12,7 @@ Step index：05
 | Branch | `main` |
 | Started | 2026-07-10T11:32:53Z |
 | Completed | 2026-07-10T11:39:38Z |
-| Commit | 提交后回填 |
+| Commit | `8489e74` (`messaging: polish sync read-state contracts`) |
 | Review evidence | Review 完成：metadata-only sync payload、thread-local read watermark、realtime hint 边界、has_more 稳定性和 legacy surface 均已检查；未启用 `message.read_state_updated` sync event。 |
 | Verification evidence | sync/read-state/health focused 7 passed；direct/group regression 19 passed；Rust CLI smoke pass；cross-domain local smoke pass；full local tests 71 passed, 2 skipped；`git diff --check` pass。 |
 | Next action | 创建 Step 05 聚焦 commit，然后启动 Step 06 |
@@ -133,7 +133,7 @@ Step index：05
 - Commit 时机：实现、验证、Review 完成后。
 - Commit 范围：sync/read-state/realtime 相关代码、tests、必要 docs。
 - Commit 前状态：`main...origin/main [ahead 7]`，Step 05 文件已修改，`git diff --check` pass。
-- Commit 后证据：提交后回填 commit hash 和 commit 后状态。
+- Commit 后证据：`8489e74`；提交后状态 `main...origin/main [ahead 8]`，工作区干净。
 - 建议消息：`messaging: polish sync read-state contracts`。
 
 ## 11. Blocked 处理
