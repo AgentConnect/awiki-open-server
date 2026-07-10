@@ -34,6 +34,7 @@ are outside this MVP:
 | Production identity providers | No production SMS, email, Aliyun, phone verification, or email verification flow. |
 | Hosted platform features | No billing, multi-tenant hosting, hosted runtime orchestration, delegated secret management, or production policy engine. |
 | High availability realtime | WebSocket notifications are in-process only; no external pub/sub, offline push, presence, typing indicators, or HA fanout. |
+| Sync log repair | No snapshot repair, retention-floor pruning, or event-log compaction beyond the MVP `retention_floor_event_seq = "0"` contract. |
 
 ## Quick Start
 
@@ -97,6 +98,26 @@ and do not enable `AWIKI_ALLOW_UNSIGNED_PEER_DEV`. Prefer
 `AWIKI_SERVICE_PRIVATE_KEY_PATH` over inline private key environment variables
 when deploying with real service keys.
 
+## Identity And Tokens
+
+Local users are constrained to this server's DID domain. Generated user DIDs
+use the `did:wba:<domain>:users:<handle>:e1_default` shape, and uploaded local
+DID documents must use `did:wba:<AWIKI_DID_DOMAIN>:...` with an `e1_` segment.
+Domain mismatches and non-e1/K1-like DIDs fail closed.
+
+Uploaded DID documents require a proof unless
+`AWIKI_ALLOW_UNSIGNED_PEER_DEV=true` is explicitly enabled for local
+development. Current proof handling validates structure and service binding:
+the proof verification method must belong to the DID, and the document must
+contain exactly one `ANPMessageService` whose endpoint and service DID match
+this server. The Community MVP does not yet perform cryptographic
+DataIntegrity/JCS proof verification for uploaded user DID documents.
+
+Registration returns an access token and refresh token. Access tokens expire in
+1 hour; refresh tokens expire in 30 days and rotate on refresh. Stale or
+expired refresh tokens are rejected. Legacy rows created before refresh-token
+storage may use the old access token only when `refresh_token` is still null.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -113,6 +134,8 @@ when deploying with real service keys.
 | `AWIKI_WS_PATH` | `/im/ws` | Local WebSocket notification path. |
 | `AWIKI_OBJECT_UPLOAD_PATH` | `/objects/upload` | Local object upload path prefix. |
 | `AWIKI_OBJECT_DOWNLOAD_PATH` | `/objects` | Local object download path prefix. |
+| `AWIKI_MAX_ATTACHMENT_BYTES` | `10485760` | Maximum accepted attachment object size, in bytes. |
+| `AWIKI_ATTACHMENT_ALLOWED_MIME_TYPES` | `application/anp-attachment-manifest+json,application/json,application/octet-stream,application/pdf,image/gif,image/jpeg,image/png,text/plain` | Comma-separated attachment MIME allowlist. |
 | `AWIKI_ALLOW_UNSIGNED_PEER_DEV` | `false` | Allows unsigned `/anp-im/rpc direct.send` only for local development tests. Do not enable for real interop. |
 | `AWIKI_DID_RESOLVER_BASE_URLS` | unset | Optional development resolver map such as `source.test=http://127.0.0.1:9001,target.test=http://127.0.0.1:9002` or a JSON object. Leave unset in normal public deployment. |
 | `AWIKI_DID_VERIFY_DEV_CODE` | `666666` | Local `/did-verify/rpc login` dev code. Falls back to `DEV_BYPASS_CODE` if set. |
@@ -129,7 +152,10 @@ AWIKI_PUBLIC_BASE_URL=https://rwiki.cn
 AWIKI_DID_DOMAIN=rwiki.cn
 AWIKI_SERVICE_DID=did:wba:rwiki.cn
 AWIKI_SERVICE_PRIVATE_KEY_PATH=/secure/path/rwiki-service-ed25519.pem
+AWIKI_ALLOW_UNSIGNED_PEER_DEV=false
 AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT=false
+AWIKI_MAX_ATTACHMENT_BYTES=10485760
+AWIKI_ATTACHMENT_ALLOWED_MIME_TYPES=application/anp-attachment-manifest+json,application/json,application/octet-stream,application/pdf,image/gif,image/jpeg,image/png,text/plain
 ```
 
 Deployment requirements:
@@ -321,7 +347,7 @@ testing.
 | `POST /auth/sms-codes`<br>`POST /user-service/auth/sms-codes`<br>`POST /auth/sms`<br>`POST /user-service/auth/sms` | Legacy SMS verification compatibility. | Disabled by default. Dev shim only when contact verification compatibility is enabled. |
 | `POST /auth/email-send`<br>`POST /user-service/auth/email-send`<br>`GET /auth/email-status`<br>`GET /user-service/auth/email-status` | Legacy email verification compatibility. | Disabled by default. Dev shim only; never sends real email. |
 | `POST /auth/phone-bind-send`<br>`POST /user-service/auth/phone-bind-send`<br>`POST /auth/phone-bind-verify`<br>`POST /user-service/auth/phone-bind-verify` | Legacy phone-bind compatibility. | Disabled by default. Dev shim only; never calls SMS or Aliyun. |
-| `POST /auth/token-refresh`<br>`POST /user-service/auth/token-refresh` | Token refresh compatibility. | Local Community token flow. |
+| `POST /auth/token-refresh`<br>`POST /user-service/auth/token-refresh` | Token refresh compatibility. | Local Community token flow with refresh-token rotation. |
 | `GET /auth/token-verify`<br>`GET /user-service/auth/token-verify`<br>`GET /auth/verify`<br>`GET /user-service/auth/verify`<br>`GET /sessions/verify`<br>`GET /user-service/sessions/verify` | Token and session verification compatibility. | Returns local verification headers for nginx `auth_request` integrations. |
 | `POST /ws/tickets`<br>`POST /user-service/ws/tickets` | Local WebSocket ticket creation. | Tickets can be used with `/im/ws`. |
 | `GET /ws/tickets/verify`<br>`GET /user-service/ws/tickets/verify`<br>`GET /auth/ws-ticket/verify`<br>`GET /user-service/auth/ws-ticket/verify` | WebSocket ticket verification. | Local compatibility helper for proxies and older clients. |
@@ -367,8 +393,10 @@ testing.
 | `inbox.mark_read` | Marks the current user's visible direct message IDs in `direct_message_views.read_at`. |
 | `inbox.get` | Returns unread messages by default. Use `{"include_read": true}` to include read messages. |
 | `direct.get_history` | Can show read messages with `is_read` and `read_at`. |
-| `read_state.mark_read` | Thread watermark API only. It does not emit account-level sync events. |
-| `sync.thread_after` | Uses the same membership checks as group reads. It cannot be used to read a group after leaving it. |
+| `sync.delta` | Returns account-level metadata events. `direct.message.created` and `group.message.created` payloads identify the thread and message but do not include `body`, `content`, or message text. Pagination uses an extra-row check for stable `has_more`; `retention_floor_event_seq` remains `"0"`. |
+| `sync.thread_after` | Returns durable thread content after `after_server_seq` and uses the same membership checks as group reads. It cannot be used to read a group after leaving it. Pagination also uses an extra-row check for stable `has_more`. |
+| `read_state.mark_read` | Thread watermark API only. Direct threads update unread message views up to `read_up_to_server_seq`; group threads compute by thread-local `server_seq` watermark. The result includes actual `updated_count` and remaining `unread_count`. |
+| Unsupported read-state checkpoints | `event_seq`, `since_event_seq`, `next_event_seq`, `checkpoint`, and `read_up_to_group_event_seq` are rejected. The MVP does not emit `message.read_state_updated` sync events. |
 
 ## Heartbeat Messages
 
@@ -422,7 +450,7 @@ The seeded open-join group DID follows `AWIKI_DID_DOMAIN`, for example:
 The connection:
 
 - Stays open.
-- Sends an initial sync hint.
+- Sends an initial sync hint without a checkpoint or `event_seq`.
 - Publishes in-process notifications for local direct and group participant
   activity.
 
@@ -433,7 +461,9 @@ Notification types:
 - `group.state_changed`
 
 Clients should still use `sync.delta` and `sync.thread_after` as the durable
-recovery path.
+recovery path. The `sync` object attached to direct and group notifications is
+a scheduling/gap hint only; it is not a read watermark, checkpoint, or thread
+`server_seq`.
 
 ## Attachments
 
@@ -443,6 +473,15 @@ recovery path.
 | Upload object | `PUT /objects/upload/{slot_id}?token=...` or send the returned `X-ANP-Upload-Token` header. |
 | Request download ticket | `attachment.get_download_ticket` accepts the local `object_id` owner flow and the Message Service ANP body shape. |
 | Download object | `GET /objects/{object_id}` accepts `?ticket=...` and `Authorization: Bearer <download_ticket>`. |
+
+Upload slots expire after 30 minutes. Download tickets expire after 15 minutes.
+`attachment.create_slot` accepts expected metadata such as `expected_size`,
+`expected_digest`/`expected_sha256`, and `content_type`/`expected_content_type`.
+Upload and commit validate the token, slot state, expiry, maximum size, SHA-256
+digest, and MIME allowlist before an object becomes committed. The helper
+`cleanup_expired_attachments` can remove expired uncommitted slots and expired
+tickets, but there is no public cleanup endpoint or background daemon in the
+MVP.
 
 `attachment.get_download_ticket` accepts:
 

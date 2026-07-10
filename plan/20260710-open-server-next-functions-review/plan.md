@@ -4,7 +4,7 @@
 DOC：`awiki-open-server/plan/20260710-open-server-next-functions-review/`  
 Harness：`awiki-harness/`  
 创建时间：2026-07-10  
-恢复指针：Step 05 已完成；下一步启动 Step 06，恢复时读取 Step 06 文档和本执行台账。
+恢复指针：Step 06 Review 和最终验证已完成；下一步提交 Step 06 docs/system-test 同步并回填 commit hash。
 
 ## 1. 目标
 
@@ -144,7 +144,7 @@ Harness：`awiki-harness/`
 | 03 | 附件生命周期与安全补齐 | Step 02 | 串行 | 否 | agent-attachments | 无 | `attachments/core.py`, `app/routes.py`, `storage/db.py` | digest/size、expiry、cleanup、quota/MIME tests | [steps/03-attachment-lifecycle-security.md](steps/03-attachment-lifecycle-security.md) | 必须 | Attachment focused tests | done |
 | 04 | DID/Auth 注册 proof 与 token 生命周期硬化 | Step 03 | 串行 | 否 | agent-identity | 无 | `user_compat/core.py`, `storage/db.py`, route/auth tests | e1/domain policy、proof、token/冲突稳定性 | [steps/04-did-auth-token-hardening.md](steps/04-did-auth-token-hardening.md) | 必须 | Identity/auth focused tests + security review | done |
 | 05 | Sync、Read-state、Realtime 契约打磨 | Step 04 | 串行 | 否 | agent-sync | 无 | `messaging/core.py`, `app/realtime.py`, sync/read-state tests | metadata projection、unread 统计、hint/reconnect 行为 | [steps/05-sync-readstate-realtime-polish.md](steps/05-sync-readstate-realtime-polish.md) | 必须 | Sync/read-state/realtime focused tests | done |
-| 06 | 系统测试与文档同步 | Step 05 | 串行 | 否 | coordinator | 只读 docs review 可并行 | `README.md`, `README.cn.md`, `deploy/`, `plan/`, possible `awiki-system-test/`, possible `awiki-harness/` | 最终 docs、cross-repo gate、global review evidence | [steps/06-system-test-docs-sync.md](steps/06-system-test-docs-sync.md) | 必须，如有修改 | Final local + public + docs gates | pending |
+| 06 | 系统测试与文档同步 | Step 05 | 串行 | 否 | coordinator | 只读 docs review 可并行 | `README.md`, `README.cn.md`, `deploy/`, `plan/`, possible `awiki-system-test/`, possible `awiki-harness/` | 最终 docs、cross-repo gate、global review evidence | [steps/06-system-test-docs-sync.md](steps/06-system-test-docs-sync.md) | 必须，如有修改 | Final local + public + docs gates | review |
 
 ## 11. 并行执行与多智能体分工
 
@@ -198,7 +198,7 @@ Harness：`awiki-harness/`
 | 03 | done | agent-attachments | 串行 | `main` | `459f17e` | 2026-07-10T11:09:52Z | 2026-07-10T11:15:57Z | `0520718` (`attachments: enforce object lifecycle checks`) | Review 完成：slot 记录 expected size/digest/content_type/expires_at；upload/commit 均校验 slot 状态和过期；commit 校验 size、sha256、MIME allowlist 和 max bytes；download route 强制 ticket 未过期；cleanup helper 只清理 expired 非 committed slots 和 expired tickets；upload route 错误映射为 HTTP 4xx；未引入 E2EE、CDN、扫描或远端 object relay。剩余风险：新增 `AWIKI_MAX_ATTACHMENT_BYTES` 和 `AWIKI_ATTACHMENT_ALLOWED_MIME_TYPES` 配置尚未同步 README/deploy，按计划交给 Step 06。 | `tests/test_attachments.py` 6 passed；`tests/test_direct_messages.py tests/test_group_participant.py` 19 passed；`smoke-asgi --data-dir .awiki-open-server/attachment-asgi` pass；`tests -q` 68 passed, 2 skipped；`git diff --check` pass。 | ready_for_next_step | pass | 启动 Step 04 |
 | 04 | done | agent-identity | 串行 | `main` | `ce40465` | 2026-07-10T11:18:51Z | 2026-07-10T11:30:51Z | `2a75e5b` (`identity: harden DID auth token lifecycle`) | L3 Review 完成：默认生成 DID 改为本域 e1；非 `did:wba`、domain mismatch、非 e1/K1-like DID fail closed；strict/public 模式拒绝 unsigned uploaded DID document，generated local document 仍可注册；signed DID document 校验 `verificationMethod` 绑定当前 DID、单个 ANPMessageService、service endpoint 和 service DID；`update_document` 由 bearer token 作为控制权证明；access token 过期后不可 verify/token-verify；refresh token rotation 生效，stale/expired refresh 被拒绝；新用户不能用 access token 当 refresh token，旧迁移行 `refresh_token IS NULL` 兼容刷新；contact verification 默认禁用，未引入 phone/email/Aliyun；HTTP token refresh 不再 catch broad Exception；未放宽 public `/anp-im/rpc` allowlist。剩余风险：用户 DID document proof 仍是结构校验，不做 DataIntegrity/JCS cryptographic verification，作为 Community MVP 风险记录。 | identity focused 20 passed；route/auth focused 4 passed, 2 skipped；`smoke-cross-domain-local` pass；full local tests 70 passed, 2 skipped；`git diff --check` pass。 | ready_for_next_step | pass | 启动 Step 05 |
 | 05 | done | agent-sync | 串行 | `main` | `0d811b7` | 2026-07-10T11:32:53Z | 2026-07-10T11:39:38Z | `8489e74` (`messaging: polish sync read-state contracts`) | Review 完成：`sync.delta` direct/group message.created payload 改为 thread/message metadata projection，测试确认不含 `body`、`content` 或消息正文；`sync.delta` 和 `sync.thread_after` 多取一条判断 `has_more`，不再 exact-limit 误报；`read_state.mark_read` direct 会实际更新本地 unread view，group 按 thread-local watermark 计算 updated/unread；继续拒绝 checkpoint/event_seq/group_event_seq 输入且不写 `message.read_state_updated` sync event；WebSocket 初始 sync 通知去掉 `event_seq=0`，direct/group 顶层 `sync` hint 去掉 thread `server_seq`。剩余风险：仍未实现 retention floor/snapshot repair，`retention_floor_event_seq` 继续为 `"0"`，按 Community MVP 留给后续可靠同步增强。 | sync/read-state/health focused 7 passed；direct/group regression 19 passed；Rust CLI smoke pass；cross-domain local smoke pass；full local tests 71 passed, 2 skipped；`git diff --check` pass。 | ready_for_next_step | pass | 启动 Step 06 |
-| 06 | pending | coordinator | 串行 | 执行时填写 | 执行时填写 |  |  |  |  |  | not_started | pending | 等 Step 05 done |
+| 06 | review | coordinator | 串行 | `main` | `9802e84` | 2026-07-10T11:41:37Z | 2026-07-10T11:49:13Z | 待提交后回填 | Review 完成：README/README.cn 已同步身份/token、附件、sync/read-state/realtime、unsupported 边界；deploy env/install/runbook 已同步附件配置和公开部署安全检查；`awiki-system-test/README.md`、`awiki-system-test/docs/message-sync-reliability-system-tests.md`、`awiki-harness/context/40-verification.md`、`awiki-harness/features/message-sync-reliability.md` 已审计，现有 message-sync/read-state gate 与本轮 open-server 文档一致，且本轮未引入新的跨仓库 suite，因此不修改 sibling repo。 | `tests -q` 71 passed, 2 skipped；`smoke-asgi --data-dir .awiki-open-server/final-asgi` pass；`smoke-cross-domain-local --data-root .awiki-open-server/final-cross --clean` pass；`smoke-rust-cli-local --awiki-cli-bin ../awiki-cli-rs2/target/debug/awiki-cli --data-root .awiki-open-server/final-rust-cli --clean` pass；`verify-public --base-url https://rwiki.cn --did-domain rwiki.cn` pass；`AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1 tests/test_rwiki_cn_system.py -q` 2 passed；`git diff --check` pass。 | ready_to_commit | pass | 创建 Step 06 docs/system-test commit 并回填 hash |
 
 ## 13. Codex Goal 执行协议
 
@@ -305,18 +305,18 @@ Harness：`awiki-harness/`
 
 | 层级 | 适用 Step / 并行组 | 命令 / 检查 | 运行时机 | 预期证据 | 门禁结果 |
 |---|---|---|---|---|---|
-| Step focused | Step 01 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py verify-public --base-url https://rwiki.cn --did-domain rwiki.cn` | Step 01 commit 前 | `ok=true` | pending |
-| Step focused | Step 01 | Rust CLI 隔离 workspace 做 `rwiki.cn <-> awiki.info` 双向 direct | Step 01 commit 前 | 两边 inbox/history 可见消息，或 blocker 证据 | pending |
+| Step focused | Step 01 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py verify-public --base-url https://rwiki.cn --did-domain rwiki.cn` | Step 01 commit 前 | Step 01 pass；Step 06 final pass | pass |
+| Step focused | Step 01 | Rust CLI 隔离 workspace 做 `rwiki.cn <-> awiki.info` 双向 direct | Step 01 commit 前 | 缺少有效 `awiki.info` 测试凭据，已记录 blocker；本地双域和 public verify 作为替代证据 | partial_with_recorded_blocker |
 | Step focused | Step 02 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_direct_messages.py tests/test_group_participant.py tests/test_messaging_surface.py tests/test_route_config.py -q` | Step 02 commit 前 | 25 passed | pass |
 | Step focused | Step 03 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_attachments.py -q` | Step 03 commit 前 | 6 passed | pass |
 | Step focused | Step 04 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_user_service_compat.py tests/test_identity_documents.py tests/test_contact_auth_compat.py tests/test_profile_compat.py tests/test_agent_compat.py -q` | Step 04 commit 前 | 20 passed | pass |
 | Step focused | Step 05 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_sync_read_state.py tests/test_messaging_surface.py tests/test_health.py -q` | Step 05 commit 前 | 7 passed | pass |
-| Repo local | Steps 02-06 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` | 每个代码 Step 或 final 前 | Step 05：71 passed, 2 skipped | pass_for_step_05 |
-| Smoke | Steps 02, 05, 06 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-cross-domain-local --data-root .awiki-open-server/cross-domain-local --clean` | 相关 Step commit 前或 final | Step 05：pass，双向 inbox delivery | pass_for_step_05 |
-| Rust CLI smoke | Steps 02-06 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-rust-cli-local --awiki-cli-bin ../awiki-cli-rs2/target/debug/awiki-cli --data-root .awiki-open-server/rust-cli --clean` | final 前，或影响 CLI 契约时 Step 前 | Step 05：pass | pass_for_step_05 |
-| Public system | Steps 01, 06 | `cd awiki-open-server && AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1 PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_rwiki_cn_system.py -q` | Step 01 / final | pass | pending |
-| Docs | Step 06 | `cd awiki-harness && python scripts/validate-docs.py && python scripts/check-drift.py` | 如果 Step 06 修改 harness 或最终 docs sync 前 | pass 或记录未改 harness 的原因 | pending |
-| Cross-repo | Step 06 | `cd awiki-system-test && ...` focused gate | 只有实际纳入 `awiki-system-test` 时 | pass 或具体 skip/blocker | pending |
+| Repo local | Steps 02-06 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` | 每个代码 Step 或 final 前 | Step 06：71 passed, 2 skipped | pass |
+| Smoke | Steps 02, 05, 06 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-cross-domain-local --data-root .awiki-open-server/cross-domain-local --clean` | 相关 Step commit 前或 final | Step 06：pass，双向 inbox delivery | pass |
+| Rust CLI smoke | Steps 02-06 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-rust-cli-local --awiki-cli-bin ../awiki-cli-rs2/target/debug/awiki-cli --data-root .awiki-open-server/rust-cli --clean` | final 前，或影响 CLI 契约时 Step 前 | Step 06：pass | pass |
+| Public system | Steps 01, 06 | `cd awiki-open-server && AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1 PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_rwiki_cn_system.py -q` | Step 01 / final | Step 06：2 passed | pass |
+| Docs | Step 06 | `cd awiki-harness && python scripts/validate-docs.py && python scripts/check-drift.py` | 如果 Step 06 修改 harness 或最终 docs sync 前 | 未修改 `awiki-harness`；已审计 `context/40-verification.md` 和 `features/message-sync-reliability.md`，无需运行 harness 写入检查 | audited_no_change |
+| Cross-repo | Step 06 | `cd awiki-system-test && ...` focused gate | 只有实际纳入 `awiki-system-test` 时 | 未修改 `awiki-system-test`；已审计 README 和 message-sync reliability docs，现有 gate 覆盖本轮 sync/read-state/realtime 契约 | audited_no_change |
 
 如果某个命令不能运行，执行者必须记录原因、影响和替代证据，不能把未运行命令写成通过。
 
@@ -372,9 +372,29 @@ Harness：`awiki-harness/`
 - 重点关注：Community MVP 边界、public `/anp-im/rpc` allowlist、DID/auth/proof 安全、attachment access grant、sync/read-state checkpoint 边界、Rust CLI 和 public interop 兼容、文档漂移。
 - 并行执行审计：确认没有写入型并行越界；如使用只读 worker，记录其报告和 coordinator 处理结果。
 - 整体验证命令 / 检查：至少运行 `awiki-open-server` full tests、local cross-domain smoke、Rust CLI smoke、public guarded tests；如果修改 `awiki-system-test` 或 `awiki-harness`，运行对应验证命令。
-- Review 发现：执行时填写。
-- 已修复问题：执行时填写。
-- 剩余风险：执行时填写。
-- 最终证据：执行时填写。
-- 最终 `git status`：执行时填写。
-- 如果本阶段修改文件：记录 Review、验证和最终集成 commit。
+- Review 发现：
+  - README/README.cn 在 Step 03-05 后存在文档漂移：未记录附件大小/MIME 配置、slot/ticket 过期、DID e1/domain/proof policy、access/refresh token 生命周期、`sync.delta` metadata-only payload、read-state 统计语义和 realtime hint-only 约束。
+  - `deploy/awiki-open-server.env.example` 和 `deploy/install-rwiki-cn-service.sh` 未包含 Step 03 新增的附件配置。
+  - `awiki-system-test` 与 `awiki-harness` 相关文档已经覆盖 message-sync/read-state gate；本轮没有新增跨仓库 suite 或改变 Harness 验证入口，不需要修改 sibling repo。
+- 已修复问题：
+  - 已更新 `README.md`、`README.cn.md` 的 Community 边界、身份/token、安全说明、配置、public deployment、API reference、read-state/sync/realtime 和附件生命周期说明。
+  - 已更新 `deploy/README.md`、`deploy/awiki-open-server.env.example`、`deploy/install-rwiki-cn-service.sh` 的公开部署安全检查和附件限制配置。
+  - 已在 Step 06 文档和主 Plan 中记录跨仓库 docs 审计结论。
+- 剩余风险：
+  - 完整 `rwiki.cn <-> awiki.info` live direct 双向 gate 仍缺少有效 `awiki.info` 测试凭据；本轮只保留 `verify-public`、guarded public system tests、本地双域 smoke 和 Rust CLI 本地 gate 证据。
+  - 上传用户 DID document proof 仍只做结构和服务绑定校验，不做 DataIntegrity/JCS cryptographic verification。
+  - 同步可靠性仍无 snapshot repair/retention floor pruning，`retention_floor_event_seq` 继续为 `"0"`；MVP 不发 `message.read_state_updated` sync event。
+  - 附件清理只有 `cleanup_expired_attachments` helper，没有公开清理 endpoint 或后台 daemon。
+  - WebSocket 仍是单进程 in-memory 通知，不提供 HA fanout、离线 push、presence 或 typing indicators。
+- 最终证据：
+  - `PYTHONPATH=../anp/anp:src python3 -m pytest tests -q`：71 passed, 2 skipped。
+  - `PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-asgi --data-dir .awiki-open-server/final-asgi`：pass。
+  - `PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-cross-domain-local --data-root .awiki-open-server/final-cross --clean`：pass，双向 inbox delivery。
+  - `PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-rust-cli-local --awiki-cli-bin ../awiki-cli-rs2/target/debug/awiki-cli --data-root .awiki-open-server/final-rust-cli --clean`：pass。
+  - `PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py verify-public --base-url https://rwiki.cn --did-domain rwiki.cn`：pass。
+  - `AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1 PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_rwiki_cn_system.py -q`：2 passed。
+  - `git diff --check`：pass。
+  - `git -C awiki-system-test status --short --branch`：`## release/0710...origin/release/0710`。
+  - `git -C awiki-harness status --short --branch`：`## main...origin/main`。
+- 最终 `git status`：提交前 `awiki-open-server` 仅有 README、deploy 和本 Plan/Step 06 文档变更；提交后回填最终状态。
+- 如果本阶段修改文件：Step 06 docs/system-test commit 待创建并回填 hash。

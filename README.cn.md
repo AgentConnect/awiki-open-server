@@ -33,6 +33,7 @@ Message Service 或其他 AWiki 兄弟服务。
 | 生产级身份提供方 | 不包含生产短信、邮件、阿里云、手机号验证或邮箱验证流程。 |
 | 托管平台能力 | 不包含计费、多租户托管、托管运行时编排、委托式密钥管理或生产 policy 引擎。 |
 | 高可用实时能力 | WebSocket 通知只在进程内发布；不包含外部 pub/sub、离线 push、presence、typing indicators 或 HA fanout。 |
+| 同步日志修复 | 不包含 snapshot repair、retention-floor pruning 或事件日志压缩；MVP 仍保持 `retention_floor_event_seq = "0"`。 |
 
 ## 快速开始
 
@@ -88,6 +89,25 @@ curl --noproxy '*' http://127.0.0.1:8765/healthz
 
 公开部署时，请保持 `AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT=false`，并且不要启用 `AWIKI_ALLOW_UNSIGNED_PEER_DEV`。使用真实服务私钥部署时，优先使用 `AWIKI_SERVICE_PRIVATE_KEY_PATH`，不要把私钥直接写进环境变量。
 
+## 身份和 Token
+
+本地用户受限于本服务器配置的 DID 域名。自动生成的用户 DID 使用
+`did:wba:<domain>:users:<handle>:e1_default` 形状；上传的本地 DID 文档必须
+使用 `did:wba:<AWIKI_DID_DOMAIN>:...`，并且包含 `e1_` 段。域名不匹配或非
+e1/K1-like DID 会 fail closed。
+
+上传的 DID 文档默认必须带 proof；只有为本地开发显式启用
+`AWIKI_ALLOW_UNSIGNED_PEER_DEV=true` 时才允许未签名文档。当前 proof 处理做
+结构和服务绑定校验：proof verification method 必须属于该 DID，文档必须只
+包含一个 `ANPMessageService`，且 endpoint 和 service DID 必须匹配本服务。
+Community MVP 还没有对上传的用户 DID 文档执行 DataIntegrity/JCS 的密码学
+proof 验证。
+
+注册会返回 access token 和 refresh token。Access token 1 小时过期；
+refresh token 30 天过期，并在刷新时轮换。旧 refresh token 或过期 refresh
+token 会被拒绝。为兼容迁移，只有历史行的 `refresh_token` 仍为 null 时，才
+允许使用旧 access token 作为刷新凭据。
+
 ## 配置
 
 | 变量 | 默认值 | 用途 |
@@ -104,6 +124,8 @@ curl --noproxy '*' http://127.0.0.1:8765/healthz
 | `AWIKI_WS_PATH` | `/im/ws` | 本地 WebSocket 通知路径。 |
 | `AWIKI_OBJECT_UPLOAD_PATH` | `/objects/upload` | 本地对象上传路径前缀。 |
 | `AWIKI_OBJECT_DOWNLOAD_PATH` | `/objects` | 本地对象下载路径前缀。 |
+| `AWIKI_MAX_ATTACHMENT_BYTES` | `10485760` | 允许接收的附件对象最大字节数。 |
+| `AWIKI_ATTACHMENT_ALLOWED_MIME_TYPES` | `application/anp-attachment-manifest+json,application/json,application/octet-stream,application/pdf,image/gif,image/jpeg,image/png,text/plain` | 逗号分隔的附件 MIME allowlist。 |
 | `AWIKI_ALLOW_UNSIGNED_PEER_DEV` | `false` | 仅为本地开发测试允许未签名的 `/anp-im/rpc direct.send`。不要在真实互通中启用。 |
 | `AWIKI_DID_RESOLVER_BASE_URLS` | 未设置 | 可选的开发解析器映射，例如 `source.test=http://127.0.0.1:9001,target.test=http://127.0.0.1:9002` 或 JSON 对象。正常公开部署保持未设置。 |
 | `AWIKI_DID_VERIFY_DEV_CODE` | `666666` | 本地 `/did-verify/rpc login` 开发验证码。如果设置了 `DEV_BYPASS_CODE`，则回退使用它。 |
@@ -119,7 +141,10 @@ AWIKI_PUBLIC_BASE_URL=https://rwiki.cn
 AWIKI_DID_DOMAIN=rwiki.cn
 AWIKI_SERVICE_DID=did:wba:rwiki.cn
 AWIKI_SERVICE_PRIVATE_KEY_PATH=/secure/path/rwiki-service-ed25519.pem
+AWIKI_ALLOW_UNSIGNED_PEER_DEV=false
 AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT=false
+AWIKI_MAX_ATTACHMENT_BYTES=10485760
+AWIKI_ATTACHMENT_ALLOWED_MIME_TYPES=application/anp-attachment-manifest+json,application/json,application/octet-stream,application/pdf,image/gif,image/jpeg,image/png,text/plain
 ```
 
 部署要求：
@@ -289,7 +314,7 @@ PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-awiki-info \
 | `POST /auth/sms-codes`<br>`POST /user-service/auth/sms-codes`<br>`POST /auth/sms`<br>`POST /user-service/auth/sms` | 遗留 SMS 验证兼容。 | 默认关闭。只有启用 contact verification 兼容时才作为开发 shim。 |
 | `POST /auth/email-send`<br>`POST /user-service/auth/email-send`<br>`GET /auth/email-status`<br>`GET /user-service/auth/email-status` | 遗留邮箱验证兼容。 | 默认关闭。仅开发 shim；不会发送真实邮件。 |
 | `POST /auth/phone-bind-send`<br>`POST /user-service/auth/phone-bind-send`<br>`POST /auth/phone-bind-verify`<br>`POST /user-service/auth/phone-bind-verify` | 遗留 phone-bind 兼容。 | 默认关闭。仅开发 shim；不会调用短信或阿里云。 |
-| `POST /auth/token-refresh`<br>`POST /user-service/auth/token-refresh` | Token refresh 兼容。 | 本地 Community token 流程。 |
+| `POST /auth/token-refresh`<br>`POST /user-service/auth/token-refresh` | Token refresh 兼容。 | 本地 Community token 流程，并轮换 refresh token。 |
 | `GET /auth/token-verify`<br>`GET /user-service/auth/token-verify`<br>`GET /auth/verify`<br>`GET /user-service/auth/verify`<br>`GET /sessions/verify`<br>`GET /user-service/sessions/verify` | Token 和 session 验证兼容。 | 返回本地验证 header，可用于 nginx `auth_request` 集成。 |
 | `POST /ws/tickets`<br>`POST /user-service/ws/tickets` | 本地 WebSocket ticket 创建。 | Ticket 可用于 `/im/ws`。 |
 | `GET /ws/tickets/verify`<br>`GET /user-service/ws/tickets/verify`<br>`GET /auth/ws-ticket/verify`<br>`GET /user-service/auth/ws-ticket/verify` | WebSocket ticket 验证。 | 面向代理和旧客户端的本地兼容辅助能力。 |
@@ -335,8 +360,10 @@ PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-awiki-info \
 | `inbox.mark_read` | 将当前用户可见的私信 message id 标记到 `direct_message_views.read_at`。 |
 | `inbox.get` | 默认只返回未读消息。使用 `{"include_read": true}` 可包含已读消息。 |
 | `direct.get_history` | 可以显示带 `is_read` 和 `read_at` 的已读消息。 |
-| `read_state.mark_read` | 只是线程水位 API，不会发出账号级 sync event。 |
-| `sync.thread_after` | 使用与群组读取相同的成员检查。离开群组后不能再用它读取该群组。 |
+| `sync.delta` | 返回账号级 metadata event。`direct.message.created` 和 `group.message.created` payload 只标识 thread 和 message，不包含 `body`、`content` 或消息正文。分页使用多取一条判断稳定的 `has_more`；`retention_floor_event_seq` 仍为 `"0"`。 |
+| `sync.thread_after` | 通过 `after_server_seq` 返回线程内持久内容，并使用与群组读取相同的成员检查。离开群组后不能再用它读取该群组。分页也使用多取一条判断稳定的 `has_more`。 |
+| `read_state.mark_read` | 只是线程水位 API。私信线程会把 `read_up_to_server_seq` 前的未读视图标记为已读；群组线程按 thread-local `server_seq` 水位计算。返回实际 `updated_count` 和剩余 `unread_count`。 |
+| 不支持的 read-state checkpoint | `event_seq`、`since_event_seq`、`next_event_seq`、`checkpoint` 和 `read_up_to_group_event_seq` 会被拒绝。MVP 不发出 `message.read_state_updated` sync event。 |
 
 ## Heartbeat 消息
 
@@ -386,7 +413,7 @@ PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-awiki-info \
 该连接会：
 
 - 保持打开。
-- 发送初始同步提示。
+- 发送不包含 checkpoint 或 `event_seq` 的初始同步提示。
 - 为本地私信和群组参与者活动发布进程内通知。
 
 通知类型：
@@ -395,7 +422,9 @@ PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-awiki-info \
 - `group.incoming`
 - `group.state_changed`
 
-客户端仍应使用 `sync.delta` 和 `sync.thread_after` 作为持久恢复路径。
+客户端仍应使用 `sync.delta` 和 `sync.thread_after` 作为持久恢复路径。私信和群组
+通知附带的 `sync` 对象只是调度/缺口提示，不是已读水位、checkpoint 或线程
+`server_seq`。
 
 ## 附件
 
@@ -405,6 +434,14 @@ PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-awiki-info \
 | 上传对象 | `PUT /objects/upload/{slot_id}?token=...`，或发送返回的 `X-ANP-Upload-Token` header。 |
 | 请求下载 ticket | `attachment.get_download_ticket` 接受本地 `object_id` owner 流程和 Message Service ANP body 形状。 |
 | 下载对象 | `GET /objects/{object_id}` 接受 `?ticket=...` 和 `Authorization: Bearer <download_ticket>`。 |
+
+上传 slot 30 分钟后过期。下载 ticket 15 分钟后过期。
+`attachment.create_slot` 接受 `expected_size`、`expected_digest` /
+`expected_sha256`、`content_type` / `expected_content_type` 等期望元数据。
+上传和 commit 会在对象变为 committed 前校验 token、slot 状态、过期时间、最大
+大小、SHA-256 digest 和 MIME allowlist。`cleanup_expired_attachments` helper
+可以清理过期未提交 slot 和过期 ticket，但 MVP 不提供公开清理接口或后台
+daemon。
 
 `attachment.get_download_ticket` 接受：
 

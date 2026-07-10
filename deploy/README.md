@@ -53,16 +53,21 @@ That command verifies:
 3. Create a private env file from `deploy/awiki-open-server.env.example`.
 4. Generate and protect an Ed25519 service private key outside the repository.
 5. Keep `AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT=false` for public service.
-6. Start the app on `127.0.0.1:8766`.
-7. Configure nginx with routes from `deploy/nginx-rwiki.cn.conf.example`.
-8. Confirm every `proxy_pass` targets `127.0.0.1:8766`; `awiki.info` is only a
+6. Keep `AWIKI_ALLOW_UNSIGNED_PEER_DEV=false`; local user DID documents should
+   be e1 DIDs under `AWIKI_DID_DOMAIN`, and uploaded DID documents should carry
+   proof.
+7. Confirm attachment limits in the env file:
+   `AWIKI_MAX_ATTACHMENT_BYTES` and `AWIKI_ATTACHMENT_ALLOWED_MIME_TYPES`.
+8. Start the app on `127.0.0.1:8766`.
+9. Configure nginx with routes from `deploy/nginx-rwiki.cn.conf.example`.
+10. Confirm every `proxy_pass` targets `127.0.0.1:8766`; `awiki.info` is only a
    remote interoperability peer, not a backend.
-9. Run `nginx -t` and reload nginx.
-10. Run `verify-public`.
-11. Configure one Rust CLI workspace for `https://rwiki.cn` and another for `https://awiki.info`.
-12. Register a test user on each side and verify direct send, inbox, and history in both directions.
+11. Run `nginx -t` and reload nginx.
+12. Run `verify-public`.
+13. Configure one Rust CLI workspace for `https://rwiki.cn` and another for `https://awiki.info`.
+14. Register a test user on each side and verify direct send, inbox, and history in both directions.
 
-If step 12 fails after `verify-public` passes, record the request direction, sender DID,
+If step 14 fails after `verify-public` passes, record the request direction, sender DID,
 recipient DID, target URL, RPC error body, and service logs before changing any sibling
 service.
 

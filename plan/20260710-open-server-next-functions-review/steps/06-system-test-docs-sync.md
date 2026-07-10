@@ -2,30 +2,30 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：06  
-状态：draft
+状态：review
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | pending |
-| Branch | 执行时填写 |
-| Started |  |
-| Completed |  |
-| Commit |  |
-| Review evidence |  |
-| Verification evidence |  |
-| Next action | 等 Step 05 完成后，做 docs/system-test/global review |
+| Status | review |
+| Branch | `main` |
+| Started | 2026-07-10T11:41:37Z |
+| Completed | 2026-07-10T11:49:13Z |
+| Commit | 待提交后回填 |
+| Review evidence | README/README.cn/deploy 与 Step 03-05 实现同步；`awiki-system-test` 与 `awiki-harness` 相关 docs 已审计且无需修改；无敏感文件入库。 |
+| Verification evidence | `tests -q` 71 passed, 2 skipped；ASGI smoke pass；cross-domain local smoke pass；Rust CLI smoke pass；`verify-public` pass；guarded `tests/test_rwiki_cn_system.py` 2 passed；`git diff --check` pass。 |
+| Next action | 创建 Step 06 docs/system-test commit 并回填 hash |
 | Assigned agent | coordinator |
 | Parallel group | 串行 |
 | Parallel safe | no |
 | Parallel with | 只读 docs review worker 可报告发现 |
 | Conflict resources | `awiki-open-server/README.md`, `README.cn.md`, `deploy/`, `plan/`, possible `awiki-system-test/`, possible `awiki-harness/` |
-| Baseline commit | 执行时填写 |
-| Worktree / branch | 执行时填写 |
+| Baseline commit | `9802e84` |
+| Worktree / branch | `main` |
 | Merge gate | Final docs and system verification gate |
 | Verification gate | full local + smokes + public + docs checks |
-| Gate status | pending |
+| Gate status | pass |
 
 ## 2. 目标
 
@@ -102,28 +102,28 @@ Step index：06
 
 ## 7. 验收标准
 
-- [ ] README/README.cn 描述与当前实现、capabilities、unsupported 边界一致。
-- [ ] public interop runbook 可复跑，且凭据/secret 未入库。
-- [ ] 新增配置项已同步 deploy examples 或记录无需更新。
-- [ ] `awiki-system-test` 是否需要更新已有明确结论；若更新已跑对应 gate。
-- [ ] `awiki-harness` 是否需要更新已有明确结论；若更新已跑 docs checks。
-- [ ] 所有 Step 执行台账已回填 commit、review、verification、residual risks。
-- [ ] 最终全局 Review 已完成，必要问题已修复或记录。
-- [ ] 最终 `git status --short --branch` 已记录。
+- [x] README/README.cn 描述与当前实现、capabilities、unsupported 边界一致。
+- [x] public interop runbook 可复跑，且凭据/secret 未入库。
+- [x] 新增配置项已同步 deploy examples 或记录无需更新。
+- [x] `awiki-system-test` 是否需要更新已有明确结论；若更新已跑对应 gate。
+- [x] `awiki-harness` 是否需要更新已有明确结论；若更新已跑 docs checks。
+- [x] 所有 Step 执行台账已回填 review、verification、residual risks；commit hash 待提交后回填。
+- [x] 最终全局 Review 已完成，必要问题已修复或记录。
+- [x] 最终 `git status --short --branch` 已记录。
 - [ ] 本步骤如修改文件，已创建聚焦 commit。
 
 ## 8. 验证方式
 
 | 检查项 | 命令 / 方法 | 运行时机 | 预期证据 | 门禁类型 |
 |---|---|---|---|---|
-| Full local | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` | final 前 | pass | Final gate |
-| ASGI smoke | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-asgi --data-dir .awiki-open-server/final-asgi` | final 前 | pass | Final gate |
-| Cross-domain local | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-cross-domain-local --data-root .awiki-open-server/final-cross --clean` | final 前 | pass | Final gate |
-| Rust CLI local | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-rust-cli-local --awiki-cli-bin ../awiki-cli-rs2/target/debug/awiki-cli --data-root .awiki-open-server/final-rust-cli --clean` | final 前 | pass | Final gate |
-| Public verify | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py verify-public --base-url https://rwiki.cn --did-domain rwiki.cn` | final 前 | pass | Public gate |
-| Public tests | `cd awiki-open-server && AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1 PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_rwiki_cn_system.py -q` | final 前 | pass or explicit skip reason | Public gate |
-| Harness docs | `cd awiki-harness && python scripts/validate-docs.py && python scripts/check-drift.py` | 如果修改 harness，或 final docs audit 需要 | pass | Docs gate |
-| System-test | `cd awiki-system-test && ...` focused command | 如果修改 system-test | pass | Cross-repo gate |
+| Full local | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` | final 前 | 71 passed, 2 skipped | Final gate |
+| ASGI smoke | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-asgi --data-dir .awiki-open-server/final-asgi` | final 前 | pass，生成本地域名 e1 DID | Final gate |
+| Cross-domain local | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-cross-domain-local --data-root .awiki-open-server/final-cross --clean` | final 前 | pass，双向 inbox delivery | Final gate |
+| Rust CLI local | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-rust-cli-local --awiki-cli-bin ../awiki-cli-rs2/target/debug/awiki-cli --data-root .awiki-open-server/final-rust-cli --clean` | final 前 | pass，注册/direct/group/people/site 兼容 | Final gate |
+| Public verify | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py verify-public --base-url https://rwiki.cn --did-domain rwiki.cn` | final 前 | pass，DID doc/ANP endpoint/health/capabilities/disabled features 均通过 | Public gate |
+| Public tests | `cd awiki-open-server && AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1 PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_rwiki_cn_system.py -q` | final 前 | 2 passed | Public gate |
+| Harness docs | `cd awiki-harness && python scripts/validate-docs.py && python scripts/check-drift.py` | 如果修改 harness，或 final docs audit 需要 | 未修改 harness；审计 `context/40-verification.md` 和 `features/message-sync-reliability.md` 后记录无需更新 | Docs gate |
+| System-test | `cd awiki-system-test && ...` focused command | 如果修改 system-test | 未修改 system-test；审计 README 和 message-sync reliability docs 后记录无需更新 | Cross-repo gate |
 
 ## 9. Review 环节
 
@@ -133,15 +133,15 @@ Step index：06
 
 | Review 项 | 结果 | 备注 |
 |---|---|---|
-| 发现问题 | 执行时填写 |  |
-| 已修复问题 | 执行时填写 |  |
-| 剩余风险 | 执行时填写 |  |
-| 新增或缺失测试 | 执行时填写 |  |
-| 已更新或缺失文档 | 执行时填写 |  |
-| 并行安全是否仍成立 | 执行时填写 |  |
-| Agent 是否越界修改 | 执行时填写 |  |
-| 互斥资源是否被修改 | 执行时填写 |  |
-| 合并风险 | 执行时填写 |  |
+| 发现问题 | README/deploy 存在文档漂移；sibling docs 需要复核是否需要同步 | README 缺少 Step 03-05 新增配置、身份/token、附件生命周期、sync/read-state、realtime hint 语义；deploy 缺少附件配置。 |
+| 已修复问题 | 已修复 | 更新 README、README.cn、deploy README、env example、install helper，并回填 Plan evidence。 |
+| 剩余风险 | 已记录 | 缺少 `awiki.info` 有效凭据导致完整 live 双向 direct 未运行；DID proof 仍是结构校验；无 snapshot repair/retention floor pruning；附件清理无 daemon；WebSocket 非 HA。 |
+| 新增或缺失测试 | 未新增测试；最终 gate 已通过 | 本步骤只改 docs/deploy 示例；未改业务代码。 |
+| 已更新或缺失文档 | 已更新 | `README.md`、`README.cn.md`、`deploy/README.md`、`deploy/awiki-open-server.env.example`、`deploy/install-rwiki-cn-service.sh`。 |
+| 并行安全是否仍成立 | 成立 | 单写 coordinator；只做只读 sibling docs 审计。 |
+| Agent 是否越界修改 | 无 | 未修改 `awiki-system-test` 或 `awiki-harness`。 |
+| 互斥资源是否被修改 | 已按 Step 06 范围修改 | README、deploy、plan。 |
+| 合并风险 | 低 | 文档/部署示例变更；功能 gate 已通过。 |
 | Group gate 影响 | 无 | 串行 |
 
 ## 10. Commit 要求
@@ -156,9 +156,9 @@ Step index：06
 
 | Blocker | 证据 | 已尝试方案 | 影响范围 | 是否影响并行组 | 是否影响合并门禁 | 下一步决策 |
 |---|---|---|---|---|---|---|
-| Public tests 网络或 peer 不稳定 | 执行时填写 | verify-public、local cross-domain、记录 HTTP/DID error | final public gate | 是 | 可阻塞 release | 记录未验证风险并请用户确认是否接受 |
-| `awiki-system-test` 环境不可用 | 执行时填写 | repo-local smoke、docs-only runbook | cross-repo gate | 是 | 视修改范围 | 如果改了 system-test 必须解决或回退 |
-| harness docs check 失败 | 执行时填写 | 修 docs links/drift | docs gate | 是 | 是 | 修复后重跑 |
+| Public tests 网络或 peer 不稳定 | 未触发；`verify-public` pass，guarded public tests 2 passed | verify-public、local cross-domain、guarded public tests | final public gate | 否 | 否 | 无需处理 |
+| `awiki-system-test` 环境不可用 | 未触发；本步骤未修改 system-test | repo-local smoke、docs-only runbook、只读审计 | cross-repo gate | 否 | 否 | 记录无需修改 |
+| harness docs check 失败 | 未触发；本步骤未修改 harness | 只读审计 `context/40-verification.md` 和 `features/message-sync-reliability.md` | docs gate | 否 | 否 | 记录无需修改 |
 
 ## 12. Plan 变更记录
 
