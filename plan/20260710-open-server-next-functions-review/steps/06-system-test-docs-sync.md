@@ -2,20 +2,20 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：06  
-状态：review
+状态：done
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | review |
+| Status | done |
 | Branch | `main` |
 | Started | 2026-07-10T11:41:37Z |
-| Completed | 2026-07-10T11:49:13Z |
-| Commit | 待提交后回填 |
+| Completed | 2026-07-10T11:52:01Z |
+| Commit | `6a120dc` (`docs: sync open server hardening gates`) |
 | Review evidence | README/README.cn/deploy 与 Step 03-05 实现同步；`awiki-system-test` 与 `awiki-harness` 相关 docs 已审计且无需修改；无敏感文件入库。 |
 | Verification evidence | `tests -q` 71 passed, 2 skipped；ASGI smoke pass；cross-domain local smoke pass；Rust CLI smoke pass；`verify-public` pass；guarded `tests/test_rwiki_cn_system.py` 2 passed；`git diff --check` pass。 |
-| Next action | 创建 Step 06 docs/system-test commit 并回填 hash |
+| Next action | 全部完成 |
 | Assigned agent | coordinator |
 | Parallel group | 串行 |
 | Parallel safe | no |
@@ -107,10 +107,10 @@ Step index：06
 - [x] 新增配置项已同步 deploy examples 或记录无需更新。
 - [x] `awiki-system-test` 是否需要更新已有明确结论；若更新已跑对应 gate。
 - [x] `awiki-harness` 是否需要更新已有明确结论；若更新已跑 docs checks。
-- [x] 所有 Step 执行台账已回填 review、verification、residual risks；commit hash 待提交后回填。
+- [x] 所有 Step 执行台账已回填 commit、review、verification、residual risks。
 - [x] 最终全局 Review 已完成，必要问题已修复或记录。
 - [x] 最终 `git status --short --branch` 已记录。
-- [ ] 本步骤如修改文件，已创建聚焦 commit。
+- [x] 本步骤如修改文件，已创建聚焦 commit。
 
 ## 8. 验证方式
 
