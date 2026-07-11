@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -8,6 +10,7 @@ import os
 from typing import Any
 
 import jcs
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
@@ -20,6 +23,7 @@ from cryptography.hazmat.primitives.serialization import (
 from awiki_open_server.protocol.anp_adapter import (
     AnpProtocolError,
     build_content_digest as anp_build_content_digest,
+    find_verification_method,
     generate_service_http_signature_headers,
     has_verification_method,
     is_verification_method_authorized,
@@ -30,9 +34,15 @@ from awiki_open_server.shared.errors import InvalidParams, Unauthorized
 
 
 def _b64u(data: bytes) -> str:
-    import base64
-
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _b64u_decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    try:
+        return base64.b64decode((value + padding).encode("ascii"), altchars=b"-_", validate=True)
+    except (binascii.Error, UnicodeEncodeError, ValueError) as exc:
+        raise InvalidParams("did_document_proof_value_invalid") from exc
 
 
 def _sha256(data: bytes) -> bytes:
@@ -49,6 +59,20 @@ def _multikey_ed25519(public_key: ed25519.Ed25519PublicKey) -> str:
     import base58
 
     return "z" + base58.b58encode(b"\xed\x01" + raw).decode("ascii")
+
+
+def _ed25519_public_key_from_multikey(value: Any) -> ed25519.Ed25519PublicKey:
+    if not isinstance(value, str) or not value.startswith("z"):
+        raise InvalidParams("did_document_proof_public_key_not_supported")
+    import base58
+
+    try:
+        decoded = base58.b58decode(value[1:])
+    except Exception as exc:
+        raise InvalidParams("did_document_proof_public_key_invalid") from exc
+    if len(decoded) != 34 or decoded[:2] != b"\xed\x01":
+        raise InvalidParams("did_document_proof_public_key_not_supported")
+    return ed25519.Ed25519PublicKey.from_public_bytes(decoded[2:])
 
 
 def _load_ed25519_private_key(pem: str) -> ed25519.Ed25519PrivateKey:
@@ -140,6 +164,58 @@ def _sign_did_document(document: dict[str, Any], key: ed25519.Ed25519PrivateKey,
     signed = dict(document)
     signed["proof"] = {**proof, "proofValue": _b64u(key.sign(signing_input))}
     return signed
+
+
+def verify_did_document_data_integrity_proof(
+    document: dict[str, Any],
+    *,
+    expected_did: str | None = None,
+) -> None:
+    did = document.get("id")
+    if not isinstance(did, str) or not did:
+        raise InvalidParams("did_document_id_required")
+    if expected_did is not None and did != expected_did:
+        raise InvalidParams("did_document_id_mismatch", data={"did": expected_did, "document_id": did})
+
+    proof = document.get("proof")
+    if not isinstance(proof, dict):
+        raise InvalidParams("did_document_proof_required")
+    if proof.get("type") != "DataIntegrityProof":
+        raise InvalidParams("did_document_proof_type_not_supported")
+    if proof.get("cryptosuite") != "eddsa-jcs-2022":
+        raise InvalidParams("did_document_proof_cryptosuite_not_supported")
+    if proof.get("proofPurpose") != "assertionMethod":
+        raise InvalidParams("did_document_proof_purpose_not_supported")
+    if not isinstance(proof.get("created"), str) or not proof.get("created"):
+        raise InvalidParams("did_document_proof_created_required")
+
+    verification_method = proof.get("verificationMethod")
+    if not isinstance(verification_method, str) or not verification_method.startswith(f"{did}#"):
+        raise InvalidParams("did_document_proof_verification_method_mismatch")
+    method = find_verification_method(document, verification_method)
+    if method is None:
+        raise InvalidParams("did_document_proof_verification_method_missing")
+    if method.get("controller") not in (None, did):
+        raise InvalidParams("did_document_proof_verification_method_controller_mismatch")
+    if not is_verification_method_authorized(document, verification_method, "assertionMethod"):
+        raise InvalidParams("did_document_proof_verification_method_unauthorized")
+    if method.get("type") != "Multikey":
+        raise InvalidParams("did_document_proof_public_key_not_supported")
+
+    public_key = _ed25519_public_key_from_multikey(method.get("publicKeyMultibase"))
+    proof_value = proof.get("proofValue")
+    if not isinstance(proof_value, str) or not proof_value:
+        raise InvalidParams("did_document_proof_value_required")
+    signature = _b64u_decode(proof_value)
+    if len(signature) != 64:
+        raise InvalidParams("did_document_proof_value_invalid")
+    proof_options = {k: v for k, v in proof.items() if k != "proofValue"}
+    unsigned = {k: v for k, v in document.items() if k != "proof"}
+    signing_input = _sha256(_canonical_json(proof_options)) + _sha256(_canonical_json(unsigned))
+    try:
+        public_key.verify(signature, signing_input)
+    except InvalidSignature as exc:
+        raise InvalidParams("did_document_proof_invalid") from exc
 
 
 def build_service_did_document(service_did: str, endpoint: str, private_key_pem: str) -> dict[str, Any]:

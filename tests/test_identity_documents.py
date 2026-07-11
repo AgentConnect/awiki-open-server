@@ -7,6 +7,7 @@ from awiki_open_server.app.main import create_app
 from awiki_open_server.app.settings import Settings
 from awiki_open_server.service_identity import generate_ed25519_private_key_pem
 from tests.conftest import rpc
+from tests.helpers import did_keypair_document, sign_did_document
 
 @pytest.mark.asyncio
 async def test_register_profile_and_page(client):
@@ -179,6 +180,7 @@ async def test_did_registration_policy_rejects_non_e1_domain_conflicts_and_publi
 @pytest.mark.asyncio
 async def test_signed_cli_did_document_service_is_not_rewritten(client):
     did = "did:wba:testserver:signed-cli:e1_cli"
+    private_key, document = did_keypair_document(did)
     service = {
         "id": f"{did}#message",
         "type": "ANPMessageService",
@@ -187,18 +189,8 @@ async def test_signed_cli_did_document_service_is_not_rewritten(client):
         "serviceDid": "did:wba:testserver",
         "securityProfiles": ["transport-protected"],
     }
-    document = {
-        "id": did,
-        "service": [service],
-        "proof": {
-            "type": "DataIntegrityProof",
-            "created": "2026-07-03T00:00:00Z",
-            "verificationMethod": f"{did}#key-1",
-            "proofPurpose": "assertionMethod",
-            "cryptosuite": "eddsa-jcs-2022",
-            "proofValue": "test-proof-value",
-        },
-    }
+    document["service"] = [service]
+    document = sign_did_document(document, private_key)
 
     reg = await rpc(client, "/user-service/did-auth/rpc", "register", {"handle": "signed-cli", "did_document": document})
 
@@ -207,10 +199,10 @@ async def test_signed_cli_did_document_service_is_not_rewritten(client):
     assert resolved.status_code == 200
     assert resolved.json()["service"] == [service]
 
-    signed_without_service = {
-        "id": "did:wba:testserver:signed-empty:e1_empty",
-        "proof": {**document["proof"], "verificationMethod": "did:wba:testserver:signed-empty:e1_empty#key-1"},
-    }
+    empty_did = "did:wba:testserver:signed-empty:e1_empty"
+    empty_private_key, signed_without_service = did_keypair_document(empty_did)
+    signed_without_service.pop("service")
+    signed_without_service = sign_did_document(signed_without_service, empty_private_key)
     rejected = await rpc(
         client,
         "/user-service/did-auth/rpc",
@@ -223,6 +215,7 @@ async def test_signed_cli_did_document_service_is_not_rewritten(client):
 @pytest.mark.asyncio
 async def test_signed_cli_did_document_service_must_match_open_server(client):
     did = "did:wba:testserver:signed-mismatch:e1_cli"
+    private_key, base_document = did_keypair_document(did)
     service = {
         "id": f"{did}#message",
         "type": "ANPMessageService",
@@ -231,14 +224,6 @@ async def test_signed_cli_did_document_service_must_match_open_server(client):
         "serviceDid": "did:wba:testserver",
         "securityProfiles": ["transport-protected"],
     }
-    proof = {
-        "type": "DataIntegrityProof",
-        "created": "2026-07-03T00:00:00Z",
-        "verificationMethod": f"{did}#key-1",
-        "proofPurpose": "assertionMethod",
-        "cryptosuite": "eddsa-jcs-2022",
-        "proofValue": "test-proof-value",
-    }
 
     wrong_endpoint = await rpc(
         client,
@@ -246,11 +231,10 @@ async def test_signed_cli_did_document_service_must_match_open_server(client):
         "register",
         {
             "handle": "signed-wrong-endpoint",
-            "did_document": {
-                "id": did,
-                "service": [{**service, "serviceEndpoint": "https://wrong.example/anp-im/rpc"}],
-                "proof": proof,
-            },
+            "did_document": sign_did_document(
+                {**base_document, "service": [{**service, "serviceEndpoint": "https://wrong.example/anp-im/rpc"}]},
+                private_key,
+            ),
         },
     )
     assert wrong_endpoint["error"]["message"] == "signed_did_document_service_endpoint_mismatch"
@@ -261,11 +245,10 @@ async def test_signed_cli_did_document_service_must_match_open_server(client):
         "register",
         {
             "handle": "signed-wrong-service-did",
-            "did_document": {
-                "id": did,
-                "service": [{**service, "serviceDid": "did:wba:wrong.example"}],
-                "proof": proof,
-            },
+            "did_document": sign_did_document(
+                {**base_document, "service": [{**service, "serviceDid": "did:wba:wrong.example"}]},
+                private_key,
+            ),
         },
     )
     assert wrong_service_did["error"]["message"] == "signed_did_document_service_did_mismatch"
@@ -276,14 +259,93 @@ async def test_signed_cli_did_document_service_must_match_open_server(client):
         "register",
         {
             "handle": "signed-many-services",
-            "did_document": {
-                "id": did,
-                "service": [service, {**service, "id": f"{did}#message-2"}],
-                "proof": proof,
-            },
+            "did_document": sign_did_document(
+                {**base_document, "service": [service, {**service, "id": f"{did}#message-2"}]},
+                private_key,
+            ),
         },
     )
     assert multiple_services["error"]["message"] == "signed_did_document_requires_single_anp_message_service"
+
+
+@pytest.mark.asyncio
+async def test_signed_did_document_cryptographic_proof_rejects_tamper_and_invalid_methods(client):
+    did = "did:wba:testserver:signed-tamper:e1_cli"
+    private_key, document = did_keypair_document(did)
+    document["service"][0]["serviceEndpoint"] = "http://testserver/anp-im/rpc"
+    document["service"][0]["serviceDid"] = "did:wba:testserver"
+    tampered = sign_did_document(document, private_key)
+    tampered["alsoKnownAs"] = ["after-sign@testserver"]
+    rejected_tamper = await rpc(
+        client,
+        "/user-service/did-auth/rpc",
+        "register",
+        {"handle": "signed-tamper", "did_document": tampered},
+    )
+    assert rejected_tamper["error"]["message"] == "did_document_proof_invalid"
+
+    bad_did = "did:wba:testserver:signed-bad-proof:e1_cli"
+    bad_key, bad_document = did_keypair_document(bad_did)
+    bad_document["service"][0]["serviceEndpoint"] = "http://testserver/anp-im/rpc"
+    bad_document["service"][0]["serviceDid"] = "did:wba:testserver"
+    bad_document = sign_did_document(bad_document, bad_key)
+    bad_document["proof"]["proofValue"] = "not-valid-base64url!"
+    rejected_bad_value = await rpc(
+        client,
+        "/user-service/did-auth/rpc",
+        "register",
+        {"handle": "signed-bad-proof", "did_document": bad_document},
+    )
+    assert rejected_bad_value["error"]["message"] == "did_document_proof_value_invalid"
+
+    missing_did = "did:wba:testserver:signed-missing-method:e1_cli"
+    missing_key, missing_document = did_keypair_document(missing_did)
+    missing_document["service"][0]["serviceEndpoint"] = "http://testserver/anp-im/rpc"
+    missing_document["service"][0]["serviceDid"] = "did:wba:testserver"
+    missing_document = sign_did_document(missing_document, missing_key)
+    missing_document["verificationMethod"] = []
+    rejected_missing = await rpc(
+        client,
+        "/user-service/did-auth/rpc",
+        "register",
+        {"handle": "signed-missing-method", "did_document": missing_document},
+    )
+    assert rejected_missing["error"]["message"] == "did_document_proof_verification_method_missing"
+
+    unauthorized_did = "did:wba:testserver:signed-unauthorized:e1_cli"
+    unauthorized_key, unauthorized_document = did_keypair_document(unauthorized_did)
+    unauthorized_document["service"][0]["serviceEndpoint"] = "http://testserver/anp-im/rpc"
+    unauthorized_document["service"][0]["serviceDid"] = "did:wba:testserver"
+    unauthorized_document["assertionMethod"] = []
+    unauthorized_document = sign_did_document(unauthorized_document, unauthorized_key)
+    rejected_unauthorized = await rpc(
+        client,
+        "/user-service/did-auth/rpc",
+        "register",
+        {"handle": "signed-unauthorized", "did_document": unauthorized_document},
+    )
+    assert rejected_unauthorized["error"]["message"] == "did_document_proof_verification_method_unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_signed_did_document_update_rejects_tampered_proof(client):
+    did = "did:wba:testserver:signed-update:e1_cli"
+    private_key, document = did_keypair_document(did)
+    document["service"][0]["serviceEndpoint"] = "http://testserver/anp-im/rpc"
+    document["service"][0]["serviceDid"] = "did:wba:testserver"
+    document = sign_did_document(document, private_key)
+    registered = await rpc(client, "/user-service/did-auth/rpc", "register", {"handle": "signed-update", "did_document": document})
+
+    updated = sign_did_document({**document, "alsoKnownAs": ["before-sign@testserver"]}, private_key)
+    updated["alsoKnownAs"] = ["after-sign@testserver"]
+    rejected = await rpc(
+        client,
+        "/user-service/did-auth/rpc",
+        "update_document",
+        {"document": updated},
+        token=registered["result"]["token"],
+    )
+    assert rejected["error"]["message"] == "did_document_proof_invalid"
 
 
 @pytest.mark.asyncio

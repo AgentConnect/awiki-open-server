@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import Request
 
 from awiki_open_server.app.settings import Settings
+from awiki_open_server.service_identity import verify_did_document_data_integrity_proof
 from awiki_open_server.shared.errors import Conflict, InvalidParams, NotFound, NotSupported, Unauthorized
 from awiki_open_server.shared.ids import new_id, now_iso
 from awiki_open_server.storage.db import Store
@@ -183,6 +184,7 @@ def _ensure_anp_message_service(document: dict[str, Any], settings: Settings, di
         verification_method = proof.get("verificationMethod")
         if not isinstance(verification_method, str) or not verification_method.startswith(f"{did}#"):
             raise InvalidParams("did_document_proof_verification_method_mismatch")
+        verify_did_document_data_integrity_proof(doc, expected_did=did)
         services = _anp_message_services(doc)
         if not services:
             raise InvalidParams("signed_did_document_requires_anp_message_service")

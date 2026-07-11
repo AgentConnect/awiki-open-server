@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import base64
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -146,7 +147,7 @@ def multikey(public_key: ed25519.Ed25519PublicKey) -> str:
 
 def user_did_document(did: str, service_endpoint: str, service_did: str, key: ed25519.Ed25519PrivateKey) -> dict:
     key_id = f"{did}#key-1"
-    return {
+    document = {
         "id": did,
         "verificationMethod": [
             {
@@ -157,6 +158,7 @@ def user_did_document(did: str, service_endpoint: str, service_did: str, key: ed
             }
         ],
         "authentication": [key_id],
+        "assertionMethod": [key_id],
         "service": [
             {
                 "id": f"{did}#anp-message",
@@ -167,15 +169,23 @@ def user_did_document(did: str, service_endpoint: str, service_did: str, key: ed
                 "securityProfiles": ["transport-protected"],
             }
         ],
-        "proof": {
-            "type": "DataIntegrityProof",
-            "created": "2026-07-10T00:00:00Z",
-            "verificationMethod": key_id,
-            "proofPurpose": "assertionMethod",
-            "cryptosuite": "eddsa-jcs-2022",
-            "proofValue": "test-proof-value",
-        },
     }
+    return sign_did_document(document, key, key_id)
+
+
+def sign_did_document(document: dict, key: ed25519.Ed25519PrivateKey, key_id: str) -> dict:
+    proof = {
+        "type": "DataIntegrityProof",
+        "created": "2026-07-10T00:00:00Z",
+        "verificationMethod": key_id,
+        "proofPurpose": "assertionMethod",
+        "cryptosuite": "eddsa-jcs-2022",
+    }
+    unsigned = {k: v for k, v in document.items() if k != "proof"}
+    signing_input = hashlib.sha256(jcs.canonicalize(proof)).digest() + hashlib.sha256(jcs.canonicalize(unsigned)).digest()
+    signed = dict(document)
+    signed["proof"] = {**proof, "proofValue": b64u(key.sign(signing_input))}
+    return signed
 
 
 def origin_proof(method: str, meta: dict, body: dict, key: ed25519.Ed25519PrivateKey) -> dict:

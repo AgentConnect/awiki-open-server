@@ -97,11 +97,12 @@ curl --noproxy '*' http://127.0.0.1:8765/healthz
 e1/K1-like DID 会 fail closed。
 
 上传的 DID 文档默认必须带 proof；只有为本地开发显式启用
-`AWIKI_ALLOW_UNSIGNED_PEER_DEV=true` 时才允许未签名文档。当前 proof 处理做
-结构和服务绑定校验：proof verification method 必须属于该 DID，文档必须只
-包含一个 `ANPMessageService`，且 endpoint 和 service DID 必须匹配本服务。
-Community MVP 还没有对上传的用户 DID 文档执行 DataIntegrity/JCS 的密码学
-proof 验证。
+`AWIKI_ALLOW_UNSIGNED_PEER_DEV=true` 时才允许未签名文档。带签名的上传 DID
+文档会执行 `DataIntegrityProof` / `eddsa-jcs-2022` 密码学验证：proof
+verification method 必须属于该 DID、被 `assertionMethod` 授权、暴露
+Ed25519 Multikey，并且能通过 proof options 和去掉 `proof` 的 DID Document
+的 JCS hash 验签。带签名文档必须只包含一个 `ANPMessageService`，且 endpoint
+和 service DID 必须匹配本服务；已签名的 service entry 不会被静默改写。
 
 注册会返回 access token 和 refresh token。Access token 1 小时过期；
 refresh token 30 天过期，并在刷新时轮换。旧 refresh token 或过期 refresh

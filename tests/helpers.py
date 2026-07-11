@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import copy
 from datetime import datetime, timezone
+import hashlib
 import time
 import urllib.parse
 
@@ -23,14 +25,7 @@ async def register_with_key(client, handle: str):
     private_key, document = did_keypair_document(did)
     document["service"][0]["serviceEndpoint"] = "http://testserver/anp-im/rpc"
     document["service"][0]["serviceDid"] = "did:wba:testserver"
-    document["proof"] = {
-        "type": "DataIntegrityProof",
-        "created": "2026-07-10T00:00:00Z",
-        "verificationMethod": f"{did}#key-1",
-        "proofPurpose": "assertionMethod",
-        "cryptosuite": "eddsa-jcs-2022",
-        "proofValue": "test-proof-value",
-    }
+    document = sign_did_document(document, private_key)
     data = await rpc(client, "/did-auth/rpc", "register", {"handle": handle, "did_document": document})
     return data["result"]["did"], data["result"]["token"], private_key, document
 
@@ -50,6 +45,28 @@ def _multikey(public_key: ed25519.Ed25519PublicKey) -> str:
     return "z" + base58.b58encode(b"\xed\x01" + raw).decode("ascii")
 
 
+def sign_did_document(
+    document: dict,
+    private_key: ed25519.Ed25519PrivateKey,
+    *,
+    key_id: str | None = None,
+    created: str = "2026-07-10T00:00:00Z",
+) -> dict:
+    did = document["id"]
+    proof = {
+        "type": "DataIntegrityProof",
+        "created": created,
+        "verificationMethod": key_id or f"{did}#key-1",
+        "proofPurpose": "assertionMethod",
+        "cryptosuite": "eddsa-jcs-2022",
+    }
+    unsigned = copy.deepcopy({k: v for k, v in document.items() if k != "proof"})
+    signing_input = hashlib.sha256(jcs.canonicalize(proof)).digest() + hashlib.sha256(jcs.canonicalize(unsigned)).digest()
+    signed = copy.deepcopy(document)
+    signed["proof"] = {**proof, "proofValue": _b64u(private_key.sign(signing_input))}
+    return signed
+
+
 def did_keypair_document(did: str) -> tuple[ed25519.Ed25519PrivateKey, dict]:
     private_key = ed25519.Ed25519PrivateKey.generate()
     key_id = f"{did}#key-1"
@@ -64,6 +81,7 @@ def did_keypair_document(did: str) -> tuple[ed25519.Ed25519PrivateKey, dict]:
             }
         ],
         "authentication": [key_id],
+        "assertionMethod": [key_id],
         "service": [
             {
                 "id": f"{did}#anp-message",

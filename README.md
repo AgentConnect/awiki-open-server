@@ -107,11 +107,13 @@ Domain mismatches and non-e1/K1-like DIDs fail closed.
 
 Uploaded DID documents require a proof unless
 `AWIKI_ALLOW_UNSIGNED_PEER_DEV=true` is explicitly enabled for local
-development. Current proof handling validates structure and service binding:
-the proof verification method must belong to the DID, and the document must
-contain exactly one `ANPMessageService` whose endpoint and service DID match
-this server. The Community MVP does not yet perform cryptographic
-DataIntegrity/JCS proof verification for uploaded user DID documents.
+development. Signed uploaded DID documents are cryptographically verified with
+`DataIntegrityProof` / `eddsa-jcs-2022`: the proof verification method must
+belong to the DID, be authorized by `assertionMethod`, expose an Ed25519
+Multikey, and verify over the JCS hashes of the proof options and the DID
+document without `proof`. Signed documents must contain exactly one
+`ANPMessageService` whose endpoint and service DID match this server; signed
+service entries are not silently rewritten.
 
 Registration returns an access token and refresh token. Access tokens expire in
 1 hour; refresh tokens expire in 30 days and rotate on refresh. Stale or
