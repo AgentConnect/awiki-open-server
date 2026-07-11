@@ -1,10 +1,10 @@
 # Plan：DID Document 密码学 proof 与 public live gate 收尾
 
-状态：review
+状态：done_with_recorded_blocker
 DOC：`awiki-open-server/plan/20260711-proof-live-gate/`  
 Harness：`awiki-harness/`  
 创建时间：2026-07-11  
-恢复指针：Step 01 已提交；Step 02 已完成实现、Review 和验证，下一步创建 Step 02 commit，然后执行 final Review。
+恢复指针：本轮可在无外部凭据条件下完成的实现、Review、验证和提交已完成；若后续提供 `AWIKI_INFO_*` 凭据，从 Step 02 的 awiki.info direct smoke 命令恢复。
 
 ## 1. 目标
 
@@ -109,7 +109,7 @@ Harness：`awiki-harness/`
 | Step | 状态 | Agent / Owner | 并行组 | 分支 / worktree | 基线 commit | 开始时间 | 完成时间 | Commit | Review 证据 | 验证证据 | 合并状态 | 门禁状态 | 下一步 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 01 | done | agent-identity | 串行 | `main` | `f202c3b` | 2026-07-11 | 2026-07-11 | `b2cc11e` (`identity: verify uploaded did document proofs`) | L3 Review 完成：验签输入与本仓服务 DID 文档签名逻辑一致；`assertionMethod` 授权、Ed25519 Multikey、base64url proofValue、64 字节签名、controller 和 DID 绑定均 fail closed；signed service entry 不自动重写；dev unsigned 路径未放宽。 | identity focused 22 passed；protocol/direct/group/sync regression 30 passed；`smoke-cross-domain-local` pass；ASGI smoke pass；full local tests 73 passed, 2 skipped；`git diff --check` pass。 | done | pass | Step 02 |
-| 02 | review | coordinator | 串行 | `main` | `b2cc11e` | 2026-07-11 | 2026-07-11 | 待回填（提交后由 final 台账回填） | Public gate Review 完成：`smoke-awiki-info` 只输出凭据 set/unset 和缺失字段，不打印 token/origin proof；capability-only 与 live direct 判定分离；未代理 `awiki.info`；未把 skipped direct 标记为 pass。 | CLI smoke tests 7 passed；`verify-public` pass；guarded public system tests 2 passed；`smoke-awiki-info` capability pass，`direct_ready=false`，`live_direct_gate=skipped_missing_credentials`；full local tests 75 passed, 2 skipped；`git diff --check` pass。 | ready_for_commit | partial_with_recorded_blocker | 创建 Step 02 commit |
+| 02 | done | coordinator | 串行 | `main` | `b2cc11e` | 2026-07-11 | 2026-07-11 | `d7e7678` (`interop: clarify awiki info live gate`) | Public gate Review 完成：`smoke-awiki-info` 只输出凭据 set/unset 和缺失字段，不打印 token/origin proof；capability-only 与 live direct 判定分离；未代理 `awiki.info`；未把 skipped direct 标记为 pass。 | CLI smoke tests 7 passed；`verify-public` pass；guarded public system tests 2 passed；`smoke-awiki-info` capability pass，`direct_ready=false`，`live_direct_gate=skipped_missing_credentials`；full local tests 75 passed, 2 skipped；`git diff --check` pass。 | done | partial_with_recorded_blocker | final Review |
 
 ## 9. Codex Goal 执行协议
 
@@ -177,13 +177,15 @@ Harness：`awiki-harness/`
 
 | 层级 | 适用 Step / 并行组 | 命令 / 检查 | 运行时机 | 预期证据 | 门禁结果 |
 |---|---|---|---|---|---|
-| Step Unit | Step 01 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_identity_documents.py tests/test_user_service_compat.py tests/test_contact_auth_compat.py tests/test_profile_compat.py tests/test_agent_compat.py -q` | Step 01 commit 前 | pass | pending |
-| Step Integration | Step 01 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-cross-domain-local --data-root .awiki-open-server/proof-cross --clean` | Step 01 commit 前 | pass | pending |
-| Regression | Step 01 / final | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` | Step 01 或 final | pass | pending |
-| Public Readiness | Step 02 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py verify-public --base-url https://rwiki.cn --did-domain rwiki.cn` | Step 02 | pass | pending |
-| Public System | Step 02 | `cd awiki-open-server && AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1 PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_rwiki_cn_system.py -q` | Step 02 | pass 或网络失败原因 | pending |
-| awiki.info Capability / Direct | Step 02 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-awiki-info --base-url https://awiki.info --did-domain rwiki.cn` | Step 02 | capability pass；direct pass only with credentials | blocked_until_credentials |
-| Hygiene | 全部 | `cd awiki-open-server && git diff --check` | commit 前 / final | pass | pending |
+| Step Unit | Step 01 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_identity_documents.py tests/test_user_service_compat.py tests/test_contact_auth_compat.py tests/test_profile_compat.py tests/test_agent_compat.py -q` | Step 01 commit 前 | 22 passed | pass |
+| Step Integration | Step 01 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-cross-domain-local --data-root .awiki-open-server/proof-cross --clean` | Step 01 commit 前 | pass，双向 inbox delivery | pass |
+| ASGI Smoke | Step 01 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-asgi --data-dir .awiki-open-server/proof-asgi` | Step 01 commit 前 | pass | pass |
+| Regression | Step 01 / final | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 -m pytest tests -q` | Step 01 和 Step 02 | Step 01：73 passed, 2 skipped；Step 02：75 passed, 2 skipped | pass |
+| CLI Smoke Unit | Step 02 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_cli_smoke.py -q` | Step 02 | 7 passed | pass |
+| Public Readiness | Step 02 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py verify-public --base-url https://rwiki.cn --did-domain rwiki.cn` | Step 02 | pass | pass |
+| Public System | Step 02 | `cd awiki-open-server && AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1 PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_rwiki_cn_system.py -q` | Step 02 | 2 passed | pass |
+| awiki.info Capability / Direct | Step 02 | `cd awiki-open-server && PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-awiki-info --base-url https://awiki.info --did-domain rwiki.cn` | Step 02 | capability pass；`direct_ready=false`，`live_direct_gate=skipped_missing_credentials` | partial_with_recorded_blocker |
+| Hygiene | 全部 | `cd awiki-open-server && git diff --check` | commit 前 / final | pass | pass |
 
 ## 13. 文档更新
 
@@ -222,9 +224,9 @@ Harness：`awiki-harness/`
 - 触发条件：Step 01 和 Step 02 完成、Review、验证并提交后执行。
 - Review 范围：proof verifier、User Service compatibility 路径、测试 helper、smoke 脚本、README、计划台账、public gate 证据和最终工作区状态。
 - 重点关注：fail closed、安全/隐私、dev unsigned 边界、没有 secret、没有 public gate 假通过、Community MVP 边界。
-- 整体验证命令 / 检查：见第 12 节；实际结果待回填。
-- Review 发现：待回填。
-- 已修复问题：待回填。
-- 剩余风险：`awiki.info` live direct 若无凭据仍记录为 blocker；不能算完成。
-- 最终证据：待回填。
-- 最终 `git status`：待回填。
+- 整体验证命令 / 检查：见第 12 节，全部本地和 public readiness gate 通过；awiki.info live direct 因凭据缺失记录 blocker。
+- Review 发现：未发现需要继续修改的代码问题；确认 `service_identity.py` 的 verifier 没有绕过 `assertionMethod` 授权，`smoke-awiki-info` 不泄露 secret 值。
+- 已修复问题：上传 DID Document 已从结构 proof 校验升级为 Ed25519 DataIntegrity/JCS 验签；脚本已能机器可读地区分 capability-only、direct-ready 和 missing credentials。
+- 剩余风险：`AWIKI_INFO_TOKEN`、`AWIKI_INFO_SENDER_DID`、`AWIKI_INFO_RECIPIENT_DID`、`AWIKI_INFO_ORIGIN_PROOF_JSON` 缺失，导致 `rwiki.cn <-> awiki.info` live direct 仍不能声明通过。后续提供凭据后应复跑 Step 02 的 direct smoke，并补对端 inbox/history 证据。
+- 最终证据：`b2cc11e` 完成 DID proof 验签；`d7e7678` 完成 awiki.info gate 输出和文档；full tests 75 passed, 2 skipped；public readiness pass；public system tests 2 passed；awiki.info capability pass with recorded credential blocker。
+- 最终 `git status`：最终台账提交前为 `main...origin/main [ahead 13]`，工作区仅有本 Plan 回填修改；最终台账提交后由最终报告记录。

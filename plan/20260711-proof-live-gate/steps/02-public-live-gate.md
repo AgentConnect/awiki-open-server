@@ -2,20 +2,20 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：02  
-状态：review
+状态：done
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | review |
+| Status | done |
 | Branch | `main` |
 | Started | 2026-07-11 |
 | Completed | 2026-07-11 |
-| Commit | 待回填（提交后由 final 台账回填） |
+| Commit | `d7e7678` (`interop: clarify awiki info live gate`) |
 | Review evidence | Public gate Review 完成：`smoke-awiki-info` 只输出凭据 set/unset 和缺失字段，不打印 token/origin proof；capability-only 与 live direct 判定分离；未代理 `awiki.info`；未把 skipped direct 标记为 pass。 |
 | Verification evidence | CLI smoke tests 7 passed；`verify-public --base-url https://rwiki.cn --did-domain rwiki.cn` pass；guarded public system tests 2 passed；`smoke-awiki-info --base-url https://awiki.info --did-domain rwiki.cn` capability pass，`direct_ready=false`，`live_direct_gate=skipped_missing_credentials`；full local tests 75 passed, 2 skipped；`git diff --check` pass。 |
-| Next action | 创建 Step 02 聚焦 commit，然后执行 final Review |
+| Next action | final Review 完成；等待后续提供 `AWIKI_INFO_*` 凭据后复跑 live direct |
 | Assigned agent | coordinator |
 | Parallel group | 串行 |
 | Parallel safe | no |
@@ -90,7 +90,7 @@ Step index：02
 - [ ] 若凭据存在，direct smoke 执行并记录 message id / 结果。
 - [x] README / README.cn 没有把 capability-only 写成双向 live gate。
 - [x] 没有提交 token、origin proof、private key 或个人测试账号信息。
-- [ ] 本步骤完成后已经创建聚焦 commit，或记录为什么仅计划回填。
+- [x] 本步骤完成后已经创建聚焦 commit，或记录为什么仅计划回填。
 
 ## 8. 验证方式
 
@@ -129,7 +129,7 @@ Step index：02
 - Commit 范围：public gate 脚本/docs/计划证据；不包含 secrets。
 - Commit 前状态：`main...origin/main [ahead 12]`；Step 02 文件已修改。
 - 纳入文件：`README.md`, `README.cn.md`, `scripts/awiki_open_cli.py`, `tests/test_cli_smoke.py`, `plan/20260711-proof-live-gate/`。
-- Commit 后证据：待回填 commit hash 和 commit 后 `git status`。
+- Commit 后证据：`d7e7678`；提交后状态 `main...origin/main [ahead 13]`，工作区干净。
 - 遗留未提交变更：必须记录原因以及为什么安全。
 - 建议消息：`interop: clarify awiki info live gate`
 
