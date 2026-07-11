@@ -85,6 +85,8 @@ python3 -m pytest awiki-open-server/tests/test_rwiki_cn_system.py -q
 
 反向互通失败经抓包和离线验签定位为 `awiki.info` 侧服务 DID 文档不同步：
 
+> 2026-07-12 CST / 2026-07-11 UTC 复测更新：本节记录的是历史阻塞。`awiki.info` 公开 DID 文档与 message-service 实际签名密钥已同步，且第 10 节的 Rust CLI live gate 已完成 `rwiki.cn <-> awiki.info` 双向 direct、inbox、history 验证。
+
 - `message-service` PostgreSQL `service_identities` 表中 `did:wba:awiki.info#key-1` 公钥为 `z6MkiwA2psGssYjWkUBdDkRpNWoaKJxDqQvvSx8dufNhxgry`。
 - 公网 `https://awiki.info/.well-known/did.json` 中 `did:wba:awiki.info#key-1` 公钥为 `z6MkiZQiC8mTEbnE4XjEKcYuMbw3Wn17ztrsP9SKpWeXhnZR`。
 - 抓包显示 `awiki.info` 发往 `rwiki.cn/anp-im/rpc` 的请求包含 `x-anp-source-service-did: did:wba:awiki.info`、`Signature`、`Signature-Input`、`Content-Digest`，digest 正确，但无法用公网 DID 文档验过。
@@ -135,3 +137,62 @@ python3 -m pytest awiki-open-server/tests/test_rwiki_cn_system.py -q
 - 因此本次没有复跑完整 `rwiki.cn <-> awiki.info` 双向 direct/inbox/history live gate。当前结论只能证明历史 key mismatch 已经从公开 DID 文档层面修复，不能替代需要真实 `awiki.info` 测试身份的双向写入 gate。
 
 后续如需关闭该 live gate 风险，需要提供或配置有效的 `awiki.info` 测试身份/OTP/token，并用隔离 Rust CLI workspace 重跑两方向 direct、inbox、history。
+
+## 10. 2026-07-12 CST / 2026-07-11 UTC live 双向 Gate 关闭记录
+
+本节是第 9 节之后的写入型复测记录。`awiki.info` 与 `rwiki.cn` 均部署在本机环境；本次通过当前源码重新构建的 Rust CLI 执行真实公网 direct 互通验证。仓库内旧 `target/debug/awiki-cli` 曾返回 `tenant is not implemented`，因此先执行：
+
+```bash
+cd ../awiki-cli-rs2
+CARGO_TARGET_DIR=/tmp/awiki-cli-rs2-live-gate-target cargo build -p awiki-cli --bin awiki-cli --locked
+```
+
+验证二进制：`/tmp/awiki-cli-rs2-live-gate-target/debug/awiki-cli`，`version=dev`，`schema tenant.create`、`schema id.register`、`schema msg.send` 均显示 `implemented=true`。
+
+隔离 workspace：
+
+- `rwiki.cn` workspace：`/tmp/awiki-live-rwiki.tZvWWX`，tenant `rwiki`，`backend_base_url=https://rwiki.cn`，`did_host=rwiki.cn`。
+- `awiki.info` workspace：`/tmp/awiki-live-awikiinfo.RFMXtA`，tenant `awikiinfo`，`backend_base_url=https://awiki.info`，`did_host=awiki.info`。
+- 两个 workspace 的 `config show` 均确认 `secret_storage.mode=vault_required`；root key 由 CLI live path 在各自临时 workspace 下生成，不写入仓库。
+- `awiki.info` 注册使用本机 `user-service` 运行配置中的 `DEV_OTP_PHONE` / `DEV_OTP_CODE`，具体值未记录到文档。
+
+测试身份：
+
+- `rwiki.cn`：`gate-rwiki-160928.rwiki.cn`，DID `did:wba:rwiki.cn:gate-rwiki-160928:e1__EfAPIO1f6ax0jPTgqI4rh-acuiNtGKpM_AlH14-Px0`，`ready_for_messaging=true`。
+- `awiki.info`：`gate-awiki-160928.awiki.info`，DID `did:wba:awiki.info:gate-awiki-160928:e1_u-I8nZ4YJkIlZxvtJrIR3Y84Mbtt9M_Dz5svQUazlA0`。
+
+正向 `rwiki.cn -> awiki.info`：
+
+```bash
+AWIKI_CLI_WORKSPACE_HOME_DIR=/tmp/awiki-live-rwiki.tZvWWX \
+/tmp/awiki-cli-rs2-live-gate-target/debug/awiki-cli msg send \
+  --to did:wba:awiki.info:gate-awiki-160928:e1_u-I8nZ4YJkIlZxvtJrIR3Y84Mbtt9M_Dz5svQUazlA0 \
+  --text 'live-gate rwiki-to-awiki evidence 20260711160928'
+```
+
+结果：
+
+- `ok=true`，`delivery.accepted=true`，消息 `msg-18dd252bc8958117`，`accepted_at=2026-07-11T16:12:11.993639+00:00`。
+- `awiki.info` workspace 执行 `msg inbox --scope direct --limit 10` 返回 `Loaded 2 inbox messages`，包含 `msg-18dd252bc8958117`，正文 `live-gate rwiki-to-awiki evidence 20260711160928`，`sender_did` 为上述 `rwiki.cn` DID，`receiver_did` 为上述 `awiki.info` DID。
+- `awiki.info` workspace 执行 `msg history --with <rwiki DID> --limit 10` 返回 `Loaded 2 direct history messages`，同样包含 `msg-18dd252bc8958117`。
+
+反向 `awiki.info -> rwiki.cn`：
+
+```bash
+AWIKI_CLI_WORKSPACE_HOME_DIR=/tmp/awiki-live-awikiinfo.RFMXtA \
+/tmp/awiki-cli-rs2-live-gate-target/debug/awiki-cli msg send \
+  --to did:wba:rwiki.cn:gate-rwiki-160928:e1__EfAPIO1f6ax0jPTgqI4rh-acuiNtGKpM_AlH14-Px0 \
+  --text 'live-gate awiki-to-rwiki evidence 20260711160928'
+```
+
+结果：
+
+- `ok=true`，`delivery.accepted=true`，消息 `msg-18dd256033e0f512`，`accepted_at=2026-07-11T16:12:30.967861+00:00`。
+- `rwiki.cn` workspace 执行 `msg inbox --scope direct --limit 10` 返回 `Loaded 3 inbox messages`，包含 `msg-18dd256033e0f512`，正文 `live-gate awiki-to-rwiki evidence 20260711160928`，`sender_did` 为上述 `awiki.info` DID，`receiver_did` 为上述 `rwiki.cn` DID，`received_at=2026-07-11T16:12:30.964360+00:00`。
+- `rwiki.cn` workspace 执行 `msg history --with <awiki.info DID> --limit 10` 返回 `Loaded 3 direct history messages`，同样包含 `msg-18dd256033e0f512`。
+
+结论：
+
+- `rwiki.cn <-> awiki.info` live direct 双向 gate 通过：两边均通过当前 Rust CLI 完成注册、发送、收件箱读取、会话历史读取。
+- 历史 `awiki.info` 服务 DID 文档 key mismatch / `invalid_peer_http_signature` 阻塞已关闭。
+- 本 gate 覆盖明文 direct 互通；不覆盖 E2EE、群、WebSocket realtime 长连接或非 direct 能力。
