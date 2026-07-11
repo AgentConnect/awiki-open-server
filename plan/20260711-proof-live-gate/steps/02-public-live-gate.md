@@ -2,30 +2,30 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：02  
-状态：pending
+状态：review
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | pending |
+| Status | review |
 | Branch | `main` |
-| Started | 待回填 |
-| Completed | 待回填 |
-| Commit | 待回填 |
-| Review evidence | 待回填 |
-| Verification evidence | 当前环境 `AWIKI_INFO_TOKEN`、`AWIKI_INFO_SENDER_DID`、`AWIKI_INFO_RECIPIENT_DID`、`AWIKI_INFO_ORIGIN_PROOF_JSON`、`AWIKI_INFO_AUTH_SCHEME` 均 unset。 |
-| Next action | 等 Step 01 完成后运行 public readiness 和 awiki.info capability/direct smoke |
+| Started | 2026-07-11 |
+| Completed | 2026-07-11 |
+| Commit | 待回填（提交后由 final 台账回填） |
+| Review evidence | Public gate Review 完成：`smoke-awiki-info` 只输出凭据 set/unset 和缺失字段，不打印 token/origin proof；capability-only 与 live direct 判定分离；未代理 `awiki.info`；未把 skipped direct 标记为 pass。 |
+| Verification evidence | CLI smoke tests 7 passed；`verify-public --base-url https://rwiki.cn --did-domain rwiki.cn` pass；guarded public system tests 2 passed；`smoke-awiki-info --base-url https://awiki.info --did-domain rwiki.cn` capability pass，`direct_ready=false`，`live_direct_gate=skipped_missing_credentials`；full local tests 75 passed, 2 skipped；`git diff --check` pass。 |
+| Next action | 创建 Step 02 聚焦 commit，然后执行 final Review |
 | Assigned agent | coordinator |
 | Parallel group | 串行 |
 | Parallel safe | no |
 | Parallel with | 无 |
 | Conflict resources | `awiki-open-server/scripts/awiki_open_cli.py`, README, 本 Plan |
-| Baseline commit | 待回填 |
+| Baseline commit | `b2cc11e` |
 | Worktree / branch | `main` |
 | Merge gate | Public gate |
 | Verification gate | `verify-public`, public system tests, `smoke-awiki-info` |
-| Gate status | blocked_until_credentials_for_live_direct |
+| Gate status | partial_with_recorded_blocker |
 
 ## 2. 目标
 
@@ -83,13 +83,13 @@ Step index：02
 
 ## 7. 验收标准
 
-- [ ] `verify-public` 对 `https://rwiki.cn` 通过，或记录网络/服务失败。
-- [ ] guarded public system tests 通过，或记录失败原因。
-- [ ] `smoke-awiki-info` capability 通过，或记录失败原因。
-- [ ] 缺少 `AWIKI_INFO_*` 时输出明确 missing credentials，不声明 direct pass。
+- [x] `verify-public` 对 `https://rwiki.cn` 通过，或记录网络/服务失败。
+- [x] guarded public system tests 通过，或记录失败原因。
+- [x] `smoke-awiki-info` capability 通过，或记录失败原因。
+- [x] 缺少 `AWIKI_INFO_*` 时输出明确 missing credentials，不声明 direct pass。
 - [ ] 若凭据存在，direct smoke 执行并记录 message id / 结果。
-- [ ] README / README.cn 没有把 capability-only 写成双向 live gate。
-- [ ] 没有提交 token、origin proof、private key 或个人测试账号信息。
+- [x] README / README.cn 没有把 capability-only 写成双向 live gate。
+- [x] 没有提交 token、origin proof、private key 或个人测试账号信息。
 - [ ] 本步骤完成后已经创建聚焦 commit，或记录为什么仅计划回填。
 
 ## 8. 验证方式
@@ -112,23 +112,23 @@ Step index：02
 
 | Review 项 | 结果 | 备注 |
 |---|---|---|
-| 发现问题 | 待回填 | 待回填 |
-| 已修复问题 | 待回填 | 待回填 |
-| 剩余风险 | 待回填 | 待回填 |
-| 新增或缺失测试 | 待回填 | 待回填 |
-| 已更新或缺失文档 | 待回填 | 待回填 |
-| 并行安全是否仍成立 | 待回填 | 待回填 |
-| Agent 是否越界修改 | 待回填 | 待回填 |
-| 互斥资源是否被修改 | 待回填 | 待回填 |
-| 合并风险 | 待回填 | 待回填 |
+| 发现问题 | 无阻断问题 | 原脚本 direct skipped 文案不够机器可读，已增强为 `credential_status` / `missing_credentials` / `direct_ready` / `live_direct_gate`。 |
+| 已修复问题 | 已修复 | README / README.cn 已说明 env vars 和 capability-only 与 live direct 的区别。 |
+| 剩余风险 | 有 | 当前环境缺少 `AWIKI_INFO_TOKEN`、`AWIKI_INFO_SENDER_DID`、`AWIKI_INFO_RECIPIENT_DID`、`AWIKI_INFO_ORIGIN_PROOF_JSON`；因此不能声明 `rwiki.cn <-> awiki.info` live direct 通过。 |
+| 新增或缺失测试 | 已新增 | `tests/test_cli_smoke.py` 覆盖缺凭据输出和凭据完整时 direct path 会调用。 |
+| 已更新或缺失文档 | 已更新 | remote diagnostics 文档已同步。 |
+| 并行安全是否仍成立 | 成立 | 未启动并行写入。 |
+| Agent 是否越界修改 | 未越界 | 只改 Step 02 授权路径。 |
+| 互斥资源是否被修改 | 已修改 | `scripts/awiki_open_cli.py`、README 和 CLI smoke tests。 |
+| 合并风险 | 低 | 输出新增字段，不改变 flags；direct 仍需完整凭据才执行。 |
 | Group gate 影响 | 无 | 串行 |
 
 ## 10. Commit 要求
 
 - Commit 时机：public checks、Review、docs/plan 回填完成后。
 - Commit 范围：public gate 脚本/docs/计划证据；不包含 secrets。
-- Commit 前状态：待回填。
-- 纳入文件：待回填。
+- Commit 前状态：`main...origin/main [ahead 12]`；Step 02 文件已修改。
+- 纳入文件：`README.md`, `README.cn.md`, `scripts/awiki_open_cli.py`, `tests/test_cli_smoke.py`, `plan/20260711-proof-live-gate/`。
 - Commit 后证据：待回填 commit hash 和 commit 后 `git status`。
 - 遗留未提交变更：必须记录原因以及为什么安全。
 - 建议消息：`interop: clarify awiki info live gate`
@@ -137,7 +137,7 @@ Step index：02
 
 | Blocker | 证据 | 已尝试方案 | 影响范围 | 是否影响并行组 | 是否影响合并门禁 | 下一步决策 |
 |---|---|---|---|---|---|---|
-| 缺少 `awiki.info` live direct 测试凭据 | `AWIKI_INFO_TOKEN`、`AWIKI_INFO_SENDER_DID`、`AWIKI_INFO_RECIPIENT_DID`、`AWIKI_INFO_ORIGIN_PROOF_JSON`、`AWIKI_INFO_AUTH_SCHEME` 均 unset | 先运行 capability/readiness；等待用户提供凭据后复跑 direct | live direct 完成判定 | 否 | 是，live direct gate 不能 pass | 记录 blocker，不伪造完成 |
+| 缺少 `awiki.info` live direct 测试凭据 | `AWIKI_INFO_TOKEN`、`AWIKI_INFO_SENDER_DID`、`AWIKI_INFO_RECIPIENT_DID`、`AWIKI_INFO_ORIGIN_PROOF_JSON` 均 unset；脚本默认 `auth_scheme` 可用 | 已运行 capability/readiness；脚本输出 `missing_credentials` | live direct 完成判定 | 否 | 是，live direct gate 不能 pass | 记录 blocker，不伪造完成 |
 
 ## 12. Plan 变更记录
 

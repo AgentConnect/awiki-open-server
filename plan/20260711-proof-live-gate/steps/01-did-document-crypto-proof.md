@@ -2,20 +2,20 @@
 
 主 Plan：[../plan.md](../plan.md)  
 Step index：01  
-状态：review
+状态：done
 
 ## 1. 执行状态
 
 | 字段 | 值 |
 |---|---|
-| Status | review |
+| Status | done |
 | Branch | `main` |
 | Started | 2026-07-11 |
 | Completed | 2026-07-11 |
-| Commit | 待回填（提交后由 Step 02 / final 台账回填） |
+| Commit | `b2cc11e` (`identity: verify uploaded did document proofs`) |
 | Review evidence | L3 Review 完成：验签输入与本仓服务 DID 文档签名逻辑一致；`proofPurpose=assertionMethod` 必须有 `assertionMethod` 授权；Ed25519 Multikey、base64url proofValue、64 字节签名、controller 和 DID 绑定均 fail closed；signed service entry 不自动重写；dev unsigned 路径未放宽。 |
 | Verification evidence | identity focused 22 passed；protocol/direct/group/sync regression 30 passed；`smoke-cross-domain-local` pass，双向 inbox delivery；ASGI smoke pass；full local tests 73 passed, 2 skipped；`git diff --check` pass。 |
-| Next action | 创建 Step 01 聚焦 commit，然后进入 Step 02 |
+| Next action | Step 02 继续 public live gate 证据 |
 | Assigned agent | agent-identity |
 | Parallel group | 串行 |
 | Parallel safe | no |
@@ -96,7 +96,7 @@ Step index：01
 - [x] local cross-domain smoke 不再依赖假 `proofValue`。
 - [x] README / README.cn 与实际 proof 行为一致。
 - [x] Review 发现已经修复或明确记录。
-- [ ] 本步骤在进入下一步之前已经创建聚焦 commit。
+- [x] 本步骤在进入下一步之前已经创建聚焦 commit。
 
 ## 8. 验证方式
 
@@ -136,7 +136,7 @@ Step index：01
 - Commit 范围：proof verifier、User Service compat 接入、tests、smoke helper、README 和本步骤计划证据。
 - Commit 前状态：`main...origin/main [ahead 11]`；Step 01 文件已修改，另有本轮新计划文档。
 - 纳入文件：`README.md`, `README.cn.md`, `scripts/awiki_open_cli.py`, `src/awiki_open_server/service_identity.py`, `src/awiki_open_server/user_compat/core.py`, `tests/helpers.py`, `tests/test_identity_documents.py`, `plan/20260711-proof-live-gate/`。
-- Commit 后证据：待回填 commit hash 和 commit 后 `git status`。
+- Commit 后证据：`b2cc11e`；提交后状态 `main...origin/main [ahead 12]`，工作区只剩 Step 02 修改。
 - 遗留未提交变更：必须记录原因以及为什么安全。
 - 建议消息：`identity: verify uploaded did document proofs`
 

@@ -1,10 +1,10 @@
 # Plan：DID Document 密码学 proof 与 public live gate 收尾
 
-状态：in_progress  
+状态：review
 DOC：`awiki-open-server/plan/20260711-proof-live-gate/`  
 Harness：`awiki-harness/`  
 创建时间：2026-07-11  
-恢复指针：Step 01 已完成实现、Review 和验证，下一步创建 Step 01 commit，然后进入 Step 02。
+恢复指针：Step 01 已提交；Step 02 已完成实现、Review 和验证，下一步创建 Step 02 commit，然后执行 final Review。
 
 ## 1. 目标
 
@@ -108,8 +108,8 @@ Harness：`awiki-harness/`
 
 | Step | 状态 | Agent / Owner | 并行组 | 分支 / worktree | 基线 commit | 开始时间 | 完成时间 | Commit | Review 证据 | 验证证据 | 合并状态 | 门禁状态 | 下一步 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 01 | review | agent-identity | 串行 | `main` | `f202c3b` | 2026-07-11 | 2026-07-11 | 待回填（提交后由 Step 02 / final 台账回填） | L3 Review 完成：验签输入与本仓服务 DID 文档签名逻辑一致；`assertionMethod` 授权、Ed25519 Multikey、base64url proofValue、64 字节签名、controller 和 DID 绑定均 fail closed；signed service entry 不自动重写；dev unsigned 路径未放宽。 | identity focused 22 passed；protocol/direct/group/sync regression 30 passed；`smoke-cross-domain-local` pass；ASGI smoke pass；full local tests 73 passed, 2 skipped；`git diff --check` pass。 | ready_for_commit | pass | 创建 Step 01 commit |
-| 02 | pending | coordinator | 串行 | `main` | 待回填 | 待回填 | 待回填 | 待回填 | 待回填 | 当前环境 `AWIKI_INFO_TOKEN`、`AWIKI_INFO_SENDER_DID`、`AWIKI_INFO_RECIPIENT_DID`、`AWIKI_INFO_ORIGIN_PROOF_JSON`、`AWIKI_INFO_AUTH_SCHEME` 均 unset。 | not_started | blocked_until_credentials_or_readiness_only | 等 Step 01 完成 |
+| 01 | done | agent-identity | 串行 | `main` | `f202c3b` | 2026-07-11 | 2026-07-11 | `b2cc11e` (`identity: verify uploaded did document proofs`) | L3 Review 完成：验签输入与本仓服务 DID 文档签名逻辑一致；`assertionMethod` 授权、Ed25519 Multikey、base64url proofValue、64 字节签名、controller 和 DID 绑定均 fail closed；signed service entry 不自动重写；dev unsigned 路径未放宽。 | identity focused 22 passed；protocol/direct/group/sync regression 30 passed；`smoke-cross-domain-local` pass；ASGI smoke pass；full local tests 73 passed, 2 skipped；`git diff --check` pass。 | done | pass | Step 02 |
+| 02 | review | coordinator | 串行 | `main` | `b2cc11e` | 2026-07-11 | 2026-07-11 | 待回填（提交后由 final 台账回填） | Public gate Review 完成：`smoke-awiki-info` 只输出凭据 set/unset 和缺失字段，不打印 token/origin proof；capability-only 与 live direct 判定分离；未代理 `awiki.info`；未把 skipped direct 标记为 pass。 | CLI smoke tests 7 passed；`verify-public` pass；guarded public system tests 2 passed；`smoke-awiki-info` capability pass，`direct_ready=false`，`live_direct_gate=skipped_missing_credentials`；full local tests 75 passed, 2 skipped；`git diff --check` pass。 | ready_for_commit | partial_with_recorded_blocker | 创建 Step 02 commit |
 
 ## 9. Codex Goal 执行协议
 
@@ -201,7 +201,7 @@ Harness：`awiki-harness/`
 
 | Blocker | Step | Agent | 并行组 | 证据 | 已尝试方案 | 影响范围 | 是否暂停同组 | 下一步决策 |
 |---|---|---|---|---|---|---|---|---|
-| 缺少 `awiki.info` live direct 测试凭据 | 02 | coordinator | 串行 | `AWIKI_INFO_TOKEN`、`AWIKI_INFO_SENDER_DID`、`AWIKI_INFO_RECIPIENT_DID`、`AWIKI_INFO_ORIGIN_PROOF_JSON`、`AWIKI_INFO_AUTH_SCHEME` 均 unset | 先运行 capability/readiness；等待用户提供凭据后复跑 direct | 仅 live direct 完成判定 | 否 | 不声明 live direct pass；记录 blocker |
+| 缺少 `awiki.info` live direct 测试凭据 | 02 | coordinator | 串行 | `AWIKI_INFO_TOKEN`、`AWIKI_INFO_SENDER_DID`、`AWIKI_INFO_RECIPIENT_DID`、`AWIKI_INFO_ORIGIN_PROOF_JSON` 均 unset；脚本默认 `auth_scheme` 可用 | 已运行 `verify-public`、guarded public tests 和 `smoke-awiki-info` capability；脚本输出 `missing_credentials` | 仅 live direct 完成判定 | 否 | 不声明 live direct pass；记录 blocker |
 
 ## 16. Plan 变更记录
 

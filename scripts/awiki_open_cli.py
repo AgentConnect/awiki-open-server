@@ -754,6 +754,22 @@ def smoke_local(args: argparse.Namespace) -> int:
 def smoke_awiki_info(args: argparse.Namespace) -> int:
     base = args.base_url.rstrip("/")
     caps = anp_rpc(base, "anp.get_capabilities", anp_params("anp.get_capabilities", args), token=args.token)
+    required_direct_credentials = [
+        ("token", "--token", "AWIKI_INFO_TOKEN", args.token),
+        ("sender_did", "--sender-did", "AWIKI_INFO_SENDER_DID", args.sender_did),
+        ("recipient_did", "--recipient-did", "AWIKI_INFO_RECIPIENT_DID", args.recipient_did),
+        ("origin_proof_json", "--origin-proof-json", "AWIKI_INFO_ORIGIN_PROOF_JSON", args.origin_proof_json),
+    ]
+    missing_credentials = [
+        {"name": name, "flag": flag, "env": env}
+        for name, flag, env, value in required_direct_credentials
+        if not value
+    ]
+    credential_status = {
+        name: "set" if value else "unset"
+        for name, _, _, value in required_direct_credentials
+    }
+    credential_status["auth_scheme"] = "set" if args.auth_scheme else "unset"
     result = {
         "ok": True,
         "mode": "awiki-info-capability",
@@ -761,8 +777,11 @@ def smoke_awiki_info(args: argparse.Namespace) -> int:
         "did_domain": args.did_domain,
         "service_did": caps.get("service_did"),
         "request_shape": "capability=params.meta/body direct=params.meta/auth/body",
+        "credential_status": credential_status,
+        "missing_credentials": missing_credentials,
+        "direct_ready": not missing_credentials,
     }
-    if args.token and args.sender_did and args.recipient_did and args.origin_proof_json:
+    if not missing_credentials:
         sent = anp_rpc(
             base,
             "direct.send",
@@ -770,11 +789,10 @@ def smoke_awiki_info(args: argparse.Namespace) -> int:
             args.token,
         )
         result["direct_message_id"] = sent.get("message_id")
+        result["live_direct_gate"] = "passed"
     else:
-        result["direct_skipped"] = (
-            "provide --token --sender-did --recipient-did --origin-proof-json; "
-            "sender DID should normally be under the configured --did-domain"
-        )
+        result["live_direct_gate"] = "skipped_missing_credentials"
+        result["direct_skipped"] = "missing awiki.info live direct credentials; set the listed env vars or pass the listed flags"
     print(json.dumps(result, ensure_ascii=False))
     return 0
 

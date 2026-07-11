@@ -264,10 +264,10 @@ PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-awiki-info \
 
 要发送私信测试消息，还需要提供：
 
-- `--token`
-- `--sender-did`
-- `--recipient-did`
-- `--origin-proof-json`
+- `--token` 或 `AWIKI_INFO_TOKEN`
+- `--sender-did` 或 `AWIKI_INFO_SENDER_DID`
+- `--recipient-did` 或 `AWIKI_INFO_RECIPIENT_DID`
+- `--origin-proof-json` 或 `AWIKI_INFO_ORIGIN_PROOF_JSON`
 
 请求形状要求：
 
@@ -277,6 +277,11 @@ PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-awiki-info \
 | 远程私信 | ANP JSON-RPC `params.meta/auth/body` |
 
 如果响应为 `missing params.meta`，说明请求形状错误，不能视为通过远程检查。
+
+没有这些 direct 凭据时，`smoke-awiki-info` 只能证明远端 capability 调用。它的
+JSON 输出会包含 `direct_ready`、`credential_status`、`missing_credentials`
+和 `live_direct_gate`；当 `live_direct_gate = "skipped_missing_credentials"`
+时，这表示 live direct 验证被凭据阻塞，不能当作通过。
 
 真实互通验证需要：
 

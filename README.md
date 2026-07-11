@@ -292,10 +292,10 @@ PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-awiki-info \
 
 To send a direct test message, also provide:
 
-- `--token`
-- `--sender-did`
-- `--recipient-did`
-- `--origin-proof-json`
+- `--token` or `AWIKI_INFO_TOKEN`
+- `--sender-did` or `AWIKI_INFO_SENDER_DID`
+- `--recipient-did` or `AWIKI_INFO_RECIPIENT_DID`
+- `--origin-proof-json` or `AWIKI_INFO_ORIGIN_PROOF_JSON`
 
 Request shape expectations:
 
@@ -306,6 +306,12 @@ Request shape expectations:
 
 A `missing params.meta` response means the request shape is wrong and is not a
 passing remote check.
+
+Without those direct credentials, `smoke-awiki-info` only proves the remote
+capability call. Its JSON output reports `direct_ready`,
+`credential_status`, `missing_credentials`, and `live_direct_gate`; treat
+`live_direct_gate = "skipped_missing_credentials"` as a blocker for live
+direct validation, not as a pass.
 
 For real interoperability validation:
 

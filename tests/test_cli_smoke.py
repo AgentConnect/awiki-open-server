@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 from scripts import awiki_open_cli
-from scripts.awiki_open_cli import anp_params, verify_public
+from scripts.awiki_open_cli import anp_params, smoke_awiki_info, verify_public
 
 
 def test_cli_help():
@@ -113,6 +113,75 @@ def test_verify_public_rejects_domain_not_serving_open_server(monkeypatch, capsy
     output = capsys.readouterr().out
     assert '"ok": false' in output
     assert "service_did_document_http" in output
+
+
+def test_smoke_awiki_info_reports_missing_direct_credentials(monkeypatch, capsys):
+    def fake_anp_rpc(base_url: str, method: str, params: dict, token=None):
+        assert base_url == "https://awiki.info"
+        assert method == "anp.get_capabilities"
+        assert "meta" in params
+        return {"service_did": "did:wba:awiki.info"}
+
+    monkeypatch.setattr(awiki_open_cli, "anp_rpc", fake_anp_rpc)
+    args = argparse.Namespace(
+        base_url="https://awiki.info",
+        did_domain="rwiki.cn",
+        token=None,
+        sender_did=None,
+        recipient_did=None,
+        auth_scheme="anp-rfc9421-origin-proof-v1",
+        origin_proof_json=None,
+        text="hello",
+    )
+
+    assert smoke_awiki_info(args) == 0
+    output = capsys.readouterr().out
+    data = json.loads(output)
+    assert data["ok"] is True
+    assert data["direct_ready"] is False
+    assert data["live_direct_gate"] == "skipped_missing_credentials"
+    assert data["credential_status"]["token"] == "unset"
+    assert {item["env"] for item in data["missing_credentials"]} == {
+        "AWIKI_INFO_TOKEN",
+        "AWIKI_INFO_SENDER_DID",
+        "AWIKI_INFO_RECIPIENT_DID",
+        "AWIKI_INFO_ORIGIN_PROOF_JSON",
+    }
+    assert "secret-token" not in output
+
+
+def test_smoke_awiki_info_sends_direct_when_credentials_are_complete(monkeypatch, capsys):
+    calls: list[tuple[str, str | None]] = []
+
+    def fake_anp_rpc(base_url: str, method: str, params: dict, token=None):
+        assert base_url == "https://awiki.info"
+        calls.append((method, token))
+        if method == "anp.get_capabilities":
+            return {"service_did": "did:wba:awiki.info"}
+        assert method == "direct.send"
+        assert params["auth"]["origin_proof"]["contentDigest"] == "sha-256=:x:"
+        return {"message_id": "msg-live"}
+
+    monkeypatch.setattr(awiki_open_cli, "anp_rpc", fake_anp_rpc)
+    args = argparse.Namespace(
+        base_url="https://awiki.info",
+        did_domain="rwiki.cn",
+        token="secret-token",
+        sender_did="did:wba:rwiki.cn:users:alice:e1_default",
+        recipient_did="did:wba:awiki.info:users:bob:e1_default",
+        auth_scheme="anp-rfc9421-origin-proof-v1",
+        origin_proof_json='{"contentDigest":"sha-256=:x:","signatureInput":"sig1=();created=1","signature":"sig1=:x:"}',
+        text="hello",
+    )
+
+    assert smoke_awiki_info(args) == 0
+    output = capsys.readouterr().out
+    data = json.loads(output)
+    assert data["direct_ready"] is True
+    assert data["live_direct_gate"] == "passed"
+    assert data["direct_message_id"] == "msg-live"
+    assert calls == [("anp.get_capabilities", "secret-token"), ("direct.send", "secret-token")]
+    assert "secret-token" not in output
 
 
 def test_smoke_cross_domain_local_subprocess(tmp_path):
