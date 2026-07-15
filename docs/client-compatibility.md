@@ -1,0 +1,77 @@
+# AWiki Open Server Client Compatibility
+
+[English](client-compatibility.md) | [简体中文](client-compatibility.zh-CN.md)
+
+Last reviewed: 2026-07-14. Record a specific client version/commit, server commit, and verification date.
+
+## 1. Overview
+
+| Client/peer | Position | Known capabilities | Key limitations |
+| --- | --- | --- | --- |
+| `awiki-cli` | Primary compatibility client | Local registration, Direct, Inbox/History, group participation, People, Site, Attachment | No E2EE; no complete group administration; registration contact arguments preserve compatibility shape only. |
+| AWiki Me | Basic product compatibility target | Identity/messages/attachments on a custom tenant require continuous validation | Agent realm allowlist, no E2EE, and no claim of every app feature. |
+| Other ANP peer | Selected public methods | Capability, Direct, selected Group/Attachment | Not complete federation; origin proof and service signature required. |
+| Legacy AWiki client | Compatibility routes | User/Message Service-shaped routes | Shims are not production identity providers or a complete hosted platform. |
+
+## 2. awiki-cli
+
+Repository smoke covers DID registration; Direct send, Inbox, and History; open-group join/send/messages; People follow/status/following/followers; Site root/pages; and attachments as implemented.
+
+```bash
+awiki-cli tenant setup community \
+  --backend-base-url https://community.example.com \
+  --did-host community.example.com
+awiki-cli init
+```
+
+Do not use `--secure required`, treat the Contact Verification development shim as real SMS/email, or depend on `group.create/add/remove/update`.
+
+## 3. AWiki Me
+
+A basic tenant needs a reachable backend base URL, matching DID host, compatibility routes for the app version, reachable attachment URLs/tickets, and matching WebSocket route/ticket flow.
+
+Verify registration/login; Direct send/receive/history; unread/read; group join/send/messages; attachment send/download/open; People/Contact/Profile; and app restart/local sync recovery.
+
+### Agent/Daemon limitation
+
+AWiki Me enables Agent/Daemon APIs only for `awiki.ai`, `awiki.info`, and `anpclaw.com`. A normal self-hosted domain may support login and messages while the Agent page remains unsupported. Open Server compatibility routes do not bypass the app realm policy.
+
+### E2EE
+
+Open Server implements neither Direct nor Group E2EE. AWiki Me must treat it as a non-E2EE tenant and must not show a misleading end-to-end-encrypted state.
+
+## 4. Public ANP methods
+
+Public `/anp-im/rpc` exposes selected `anp.get_capabilities`, `direct.send`, `group.get_info`, `group.join`, and `attachment.get_download_ticket` methods. Local `/im/rpc` additionally contains Inbox, History, Sync, Read State, group-participant, and attachment-control methods. Do not expose all local compatibility RPC as a cross-domain contract.
+
+## 5. Meaning of compatibility routes
+
+User Service/Message Service-shaped routes are implemented locally and do not proxy `awiki.info`. They let current clients reuse existing shapes, provide local profile/token/DID/relationship/message entry points, return `contact_verification_not_enabled` when appropriate, and provide local verification headers for integrations such as Nginx `auth_request`.
+
+Compatibility does not mean a complete hosted platform, production identity provider, complete Agent orchestration, complete group/admin policy, or permanent compatibility with every future client.
+
+## 6. Verification record
+
+```text
+Date: YYYY-MM-DD
+Open Server commit/version:
+Client name/version/commit:
+Domain/base URL:
+ANP SDK version:
+
+Passed:
+- identity
+- direct
+- inbox/history
+- read/sync
+- group participant
+- attachment
+- people/profile/site
+- websocket/restart
+
+Limitations/failures:
+- agent
+- secure
+- group admin
+- ...
+```
