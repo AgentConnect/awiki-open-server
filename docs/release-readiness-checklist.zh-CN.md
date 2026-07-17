@@ -40,7 +40,9 @@
 
 - [ ] 记录验证日期和各组件版本/commit。
 - [ ] AWiki Me ↔ 托管服务的 direct、group、attachment、contact 状态已验证。
-- [ ] awiki-cli ↔ Open Server 的身份、私信、群参与、附件、people/site 状态已验证。
+- [ ] awiki-cli ↔ Open Server 的身份、Direct、Community Group 完整生命周期、附件、people/site 状态已验证。
+- [ ] 通过隔离的公网域 workspace 验证 Open Server 托管群和远端托管群，包括 add/join、双向消息、projection、receipt、leave/remove、retry 和重启恢复。
+- [ ] `/operations/status` 使用独立保护、`/healthz` 保持最小响应，日志和报告无 token/proof/signature/message body。
 - [ ] AWiki Me ↔ Open Server 的自定义租户主流程已验证或明确标记未验证。
 - [ ] 非 allowlist 自托管域名上的 Agent/Daemon 状态被明确说明。
 - [ ] Web 不被误写为可用产品平台。

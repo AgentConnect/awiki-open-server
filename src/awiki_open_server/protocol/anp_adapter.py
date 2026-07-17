@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import importlib.util
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 
-REQUIRED_ANP_SDK_VERSION = "0.8.8"
+REQUIRED_ANP_SDK_VERSION = "0.8.9"
 
 
 def _loaded_anp_version() -> str | None:
@@ -48,10 +49,20 @@ if ANP_SDK_VERSION != REQUIRED_ANP_SDK_VERSION:
     )
 
 from anp.authentication import (  # noqa: E402
+    build_group_message_service as _sdk_build_group_message_service,
     build_content_digest as _sdk_build_content_digest,
+    create_did_wba_document as _sdk_create_did_wba_document,
     extract_signature_metadata as _sdk_extract_signature_metadata,
     generate_http_signature_headers as _sdk_generate_http_signature_headers,
     verify_http_message_signature as _sdk_verify_http_message_signature,
+)
+from anp.proof import generate_group_receipt_proof as _sdk_generate_group_receipt_proof  # noqa: E402
+from anp.proof import verify_group_receipt_proof as _sdk_verify_group_receipt_proof  # noqa: E402
+from anp.wns import (  # noqa: E402
+    canonicalize_binding_generation as _sdk_canonicalize_binding_generation,
+    compare_binding_generations as _sdk_compare_binding_generations,
+    normalize_handle as _sdk_normalize_handle,
+    verify_handle_binding as _sdk_verify_handle_binding,
 )
 from anp.proof.im import decode_im_signature as _sdk_decode_im_signature  # noqa: E402
 from anp.proof.im import parse_im_signature_input as _sdk_parse_im_signature_input  # noqa: E402
@@ -82,6 +93,102 @@ class ServiceHttpSignatureVerification:
 class OriginProofVerification:
     keyid: str
     verification_method: dict[str, Any]
+
+
+def create_group_did_identity(
+    *,
+    hostname: str,
+    group_id: str,
+    service_endpoint: str,
+    service_did: str,
+) -> tuple[dict[str, Any], str]:
+    """Create an e1 Group DID document and its PKCS#8 Ed25519 private key."""
+    service = _sdk_build_group_message_service(
+        did="did:wba:placeholder",
+        service_endpoint=service_endpoint,
+        fragment="anp-message",
+        service_did=service_did,
+        profiles=["anp.group.base.v1"],
+        security_profiles=["transport-protected"],
+        auth_schemes=["didwba"],
+    )
+    service["id"] = "#anp-message"
+    document, keys = _sdk_create_did_wba_document(
+        hostname,
+        path_segments=["groups", group_id],
+        services=[service],
+        enable_e2ee=False,
+        did_profile="e1",
+    )
+    private_key = keys.get("key-1", (None, None))[0]
+    if not isinstance(private_key, bytes):
+        raise AnpProtocolError("group_identity_key_missing")
+    return dict(document), private_key.decode("ascii")
+
+
+def sign_group_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    private_key: Any,
+    verification_method: str,
+) -> dict[str, Any]:
+    try:
+        return _sdk_generate_group_receipt_proof(
+            dict(receipt),
+            private_key,
+            verification_method,
+        )
+    except Exception as exc:
+        raise AnpProtocolError("group_receipt_signing_failed", str(exc)) from exc
+
+
+def verify_group_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    issuer_did_document: Mapping[str, Any],
+) -> bool:
+    return bool(_sdk_verify_group_receipt_proof(dict(receipt), dict(issuer_did_document)))
+
+
+def normalize_wns_handle(handle: str) -> str:
+    try:
+        return str(_sdk_normalize_handle(handle))
+    except Exception as exc:
+        raise AnpProtocolError("group_handle_invalid", str(exc)) from exc
+
+
+def canonicalize_binding_generation(value: Any) -> str:
+    try:
+        return str(_sdk_canonicalize_binding_generation(value))
+    except Exception as exc:
+        raise AnpProtocolError("group_binding_generation_invalid", str(exc)) from exc
+
+
+def compare_binding_generations(left: Any, right: Any) -> int:
+    try:
+        return int(_sdk_compare_binding_generations(left, right))
+    except Exception as exc:
+        raise AnpProtocolError("group_binding_generation_invalid", str(exc)) from exc
+
+
+def verify_wns_handle_binding(
+    handle: str,
+    *,
+    did_document: Mapping[str, Any] | None = None,
+    timeout_seconds: float = 10,
+    verify_ssl: bool = True,
+) -> Any:
+    try:
+        return asyncio.run(
+            _sdk_verify_handle_binding(
+                handle,
+                did_document=dict(did_document) if did_document is not None else None,
+                timeout_seconds=timeout_seconds,
+                verify_ssl=verify_ssl,
+            )
+        )
+    except Exception as exc:
+        raise AnpProtocolError("group_handle_binding_invalid", str(exc)) from exc
 
 
 def build_content_digest(body: bytes | bytearray | str) -> str:
@@ -350,10 +457,17 @@ __all__ = [
     "OriginProofVerification",
     "ServiceHttpSignatureVerification",
     "build_content_digest",
+    "canonicalize_binding_generation",
+    "compare_binding_generations",
+    "create_group_did_identity",
     "find_verification_method",
     "generate_service_http_signature_headers",
     "has_verification_method",
     "is_verification_method_authorized",
+    "normalize_wns_handle",
+    "sign_group_receipt",
     "verify_origin_proof",
+    "verify_group_receipt",
+    "verify_wns_handle_binding",
     "verify_service_http_signature",
 ]

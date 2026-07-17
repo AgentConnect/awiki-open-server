@@ -47,9 +47,9 @@ flowchart LR
 | --- | --- | --- |
 | AWiki Me ↔ AWiki 托管服务 | 主路径 | 默认租户与真实 E2E 测试域名需要分别说明 |
 | awiki-cli ↔ AWiki 托管服务 | 主路径 | 安装 channel、服务能力与 CLI 版本必须匹配 |
-| awiki-cli ↔ awiki-open-server | 已有本地兼容与 smoke 路径 | Open Server 不支持 E2EE、完整群管理和生产身份提供方 |
+| awiki-cli ↔ awiki-open-server | 已有 Community Group v1 与本地兼容路径 | Open Server 不支持 E2EE、大群/复杂治理、HA 和生产身份提供方 |
 | AWiki Me ↔ awiki-open-server | 基础身份/IM 路径需持续验证 | 非内置 allowlist 域名上的 Agent/Daemon 功能会受限；Open Server 无 E2EE |
-| awiki-open-server ↔ 其他 ANP 域 | 选定方法互通 | 不是完整 federation；仅公开有限 JSON-RPC 方法与本地对象能力 |
+| awiki-open-server ↔ 其他 ANP 域 | Direct 与 Community Group v1 通过 DID discovery 互通 | 不是 federation relay 或 peer-route mesh；只公开文档列出的 ANP 与对象能力 |
 | AWiki Me Web ↔ 任意服务 | 当前不应宣称可用 | Flutter Web 使用的核心 SDK入口目前是运行时 stub |
 
 ## 对外统一术语

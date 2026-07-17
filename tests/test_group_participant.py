@@ -43,7 +43,7 @@ async def test_group_participant_local_views_require_membership(client):
     assert sent["result"]["accepted"] is True
 
     alice_members = await rpc(client, "/im/rpc", "group.list_members", {"group_did": group_did}, token=alice_token)
-    assert [member["member_did"] for member in alice_members["result"]] == [alice_did]
+    assert [member["member_did"] for member in alice_members["result"]["members"]] == [alice_did]
 
     alice_messages = await rpc(client, "/im/rpc", "group.list_messages", {"group_did": group_did}, token=alice_token)
     assert [message["message_id"] for message in alice_messages["result"]["messages"]] == [sent["result"]["message_id"]]
@@ -62,7 +62,7 @@ async def test_group_participant_local_views_require_membership(client):
 
     await rpc(client, "/im/rpc", "group.join", {"group_did": group_did}, token=bob_token)
     bob_members = await rpc(client, "/im/rpc", "group.list_members", {"group_did": group_did}, token=bob_token)
-    assert {member["member_did"] for member in bob_members["result"]} == {alice_did, bob_did}
+    assert {member["member_did"] for member in bob_members["result"]["members"]} == {alice_did, bob_did}
 
     bob_thread = await rpc(
         client,
@@ -106,7 +106,7 @@ async def test_group_local_views_support_anp_params_and_pagination(client):
         },
         token=alice_token,
     )
-    assert [group["group_did"] for group in listed["result"]] == [group_did]
+    assert [group["group_did"] for group in listed["result"]["groups"]] == [group_did]
 
     members = await rpc(
         client,
@@ -122,7 +122,7 @@ async def test_group_local_views_support_anp_params_and_pagination(client):
         },
         token=alice_token,
     )
-    assert [member["member_did"] for member in members["result"]] == [alice_did]
+    assert [member["member_did"] for member in members["result"]["members"]] == [alice_did]
 
     first_page = await rpc(
         client,

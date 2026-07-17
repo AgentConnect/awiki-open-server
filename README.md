@@ -10,7 +10,7 @@
 
 AWiki Open Server is a self-contained, single-process Community Server MVP. It provides local DID identity, Direct/Group messaging, attachments, Markdown sites, WebSocket notifications, and limited cross-domain ANP interoperability. It does not depend on `awiki.info`, User Service, Message Service, or another sibling AWiki service at runtime.
 
-> **Know the boundaries before adopting it.** This is a single-node MVP. Messages are not end-to-end encrypted. It does not include production SMS/email verification, high availability, offline push, complete group administration, complete federation, billing, or hosted Agent orchestration. Do not use it directly as a high-sensitivity communications or large-scale production platform.
+> **Know the boundaries before adopting it.** This is a small-scale, single-node MVP. Messages are not end-to-end encrypted. It does not include production SMS/email verification, high availability, offline push, large-group fanout, complex group governance, federation relay, billing, or hosted Agent orchestration. Do not use it directly as a high-sensitivity communications or large-scale production platform.
 
 > **Demo pending: local-community smoke GIF**
 > Show server startup, `healthz`, a Direct message between two local identities, and Inbox/History output. The intended file is `docs/assets/readme/open-server-local-smoke.gif`; see the [asset plan](docs/screenshot-plan.md).
@@ -20,7 +20,7 @@ AWiki Open Server is a self-contained, single-process Community Server MVP. It p
 - Deploy an independent AWiki community on your own domain.
 - Develop and test services compatible with AWiki CLI/client shapes.
 - Validate DID data, service signatures, and cross-domain ANP Direct.
-- Experiment with identity, messaging, group participation, attachments, and Markdown sites in a single-node environment.
+- Experiment with identity, messaging, Community Group hosting/interoperability, attachments, and Markdown sites in a single-node environment.
 - Study a readable implementation that does not forward to AWiki hosted backends.
 
 ## Not suitable for
@@ -28,8 +28,8 @@ AWiki Open Server is a self-contained, single-process Community Server MVP. It p
 - Sensitive communication requiring Direct or Group E2EE.
 - Multi-node, HA, external pub/sub, presence, typing, or offline push.
 - Production phone/email/commercial identity providers.
-- Complete group administration, complex policy, billing, multi-tenant hosting, or hosted Runtime orchestration.
-- Complete federation, remote projections, or remote object relay.
+- Large groups, complex governance, billing, multi-tenant hosting, or hosted Runtime orchestration.
+- Federation relay/peer-route meshes, multi-region replication, or remote object relay.
 
 ## Five-minute quick start
 
@@ -85,7 +85,7 @@ This checks a running local service. See [Getting Started](docs/getting-started.
 | --- | --- |
 | Identity | DID registration, public DID Documents, profiles, local tokens, DID verification compatibility, and revoke. |
 | Direct | Plaintext send, local Inbox/History, read state, and sync. |
-| Group | Discover existing/open groups and use participant join/leave/send/members/messages. |
+| Group | Create and manage small groups; open-join or admin-add members; local/cross-domain send, history, sync, read state, and realtime projections. |
 | Attachments | Local upload slots, object commit, download tickets, and protected downloads. |
 | Realtime | Single-process WebSocket notifications; clients recover durably through sync. |
 | Content | Handle/content compatibility APIs plus Markdown Site root and pages. |
@@ -97,8 +97,8 @@ This checks a running local service. See [Getting Started](docs/getting-started.
 | Not included | Impact |
 | --- | --- |
 | Direct/Group E2EE | The service stores and returns message payloads; do not use the current release for sensitive communication. |
-| Complete group administration | `group.create/add/remove/update_profile/update_policy` return `not_supported`. |
-| Federation infrastructure | No peer management, relay, remote projection, or remote object relay. |
+| Large-group and complex governance | No high-concurrency fanout, role customization, approval workflow, archival, ownership transfer, or distributed Group Host. |
+| Federation infrastructure | Cross-domain Group uses direct DID discovery and a durable local outbox; there is no peer-route mesh, relay, multi-region replication, or remote object relay. |
 | Production identity providers | No real SMS, email, Aliyun, or phone/email verification flow. |
 | Hosted-platform capabilities | No billing, multi-tenant hosting, hosted Runtime, delegated secret management, or production policy engine. |
 | HA realtime | No external pub/sub, offline push, presence, typing, or HA fanout. |
@@ -134,11 +134,11 @@ awiki-cli tenant setup community \
 awiki-cli init
 ```
 
-The repository provides a repeatable Rust CLI smoke covering local registration, Direct, group participation, People, and Site. Do not connect to the current Open Server with `--secure required`.
+The repository provides repeatable Rust CLI gates covering local registration, Direct, the Community Group lifecycle in both host directions, People, and Site. Do not connect to the current Open Server with `--secure required`.
 
 ### AWiki Me
 
-AWiki Me supports configurable tenants, subject to version-by-version validation of basic identity, Direct, group participation, and attachments. Open Server has no E2EE. AWiki Me also restricts Agent/Daemon features to a realm allowlist, so normal self-hosted domains fail closed. The ability to sign in and send a message does not imply complete compatibility with every app surface.
+AWiki Me supports configurable tenants, subject to version-by-version validation of basic identity, Direct, Community Group flows, and attachments. Open Server has no E2EE. AWiki Me also restricts Agent/Daemon features to a realm allowlist, so normal self-hosted domains fail closed. The ability to sign in and send a message does not imply complete compatibility with every app surface.
 
 See [Client Compatibility](docs/client-compatibility.md).
 
@@ -185,6 +185,7 @@ Report security issues privately according to [SECURITY.md](SECURITY.md).
 | [Configuration Reference](docs/configuration.md) | Environment variables, defaults, and security purpose. |
 | [Data, Backup, and Operations](docs/operations.md) | Data directories, backup, restore, upgrades, and troubleshooting. |
 | [ANP Interoperability](docs/anp-interop.md) | DID discovery, origin proof, HTTP Signatures, and bidirectional verification. |
+| [Community Group v1 Gate Report](docs/community-groups-gate-report-20260716.md) | Redacted public two-direction, receipt, retry, test, and security evidence. |
 | [Asset Plan](docs/screenshot-plan.md) | README terminal demos and architecture assets. |
 | [`deploy/README.md`](deploy/README.md) | Existing `rwiki.cn` deployment example and checklist. |
 

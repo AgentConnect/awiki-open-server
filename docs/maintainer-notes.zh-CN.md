@@ -27,9 +27,11 @@ self-hosted, fastapi, anp, did, messaging, community-server, federation, python
 - 无 E2EE；
 - 单节点；
 - 无生产 SMS/Email；
-- 无完整 Group Admin；
+- 只支持小群和固定角色/策略，无大群或复杂治理；
 - 无 HA/Offline Push；
-- 无完整 Federation。
+- 无 federation relay、peer-route mesh 或多区域复制。
+
+Community Group v1 已包含建群、管理、跨域直连投递与成员域 projection，不得继续描述为商业版专属。
 
 除非这些边界发生实质变化，不应改成 Stable。
 
@@ -66,11 +68,11 @@ README.zh-CN.md
 - `smoke-asgi`；
 - `smoke-local`；
 - `smoke-cross-domain-local`；
-- Rust CLI local smoke；
+- Rust CLI 两个公网 Host 方向的完整 Group lifecycle；
 - 公网 `verify-public`（如发布公网）；
 - AWiki Me custom tenant smoke（如对外宣称 App 兼容）。
 
-特别确认 AWiki Me 的 Agent realm allowlist，不要写成“完整支持当前 App”。
+同时确认 Group Receipt、outbox/restart 证据和 AWiki Me 的 Agent realm allowlist，不要写成“完整支持当前 App”。
 
 ## 7. Security 与 License
 

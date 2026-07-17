@@ -4,7 +4,7 @@
 
 ## 1. Goal
 
-The current scope publishes resolvable service/user DID Documents, exposes a limited `/anp-im/rpc`, verifies business `auth.origin_proof` and service HTTP Signatures/Content-Digest, supports bidirectional Direct between local and remote domains, and exposes selected public Group/Attachment methods. It is not complete federation.
+The current scope publishes resolvable service/user/Group DID Documents, exposes the Community ANP surface at `/anp-im/rpc`, verifies business `auth.origin_proof`, service HTTP Signatures/Content-Digest, and Group Receipts, and supports bidirectional Direct plus small-scale cross-domain Group hosting and member-home projections. It is direct DID-discovery interoperability, not a federation relay or peer-route mesh.
 
 ## 2. Public service DID
 
@@ -20,11 +20,13 @@ The document should contain `did:wba:community.example.com`, a verifiable Ed2551
 | --- | --- | --- |
 | `anp.get_capabilities` | Capability discovery | Public capability contract. |
 | `direct.send` | Cross-domain Direct | Origin proof and service HTTP Signature. |
-| `group.get_info` | Discover an open group | Current public contract. |
-| `group.join` | Join an open group | Origin proof and service signature. |
+| `group.create`, `group.get_info` | Create a Group Host or read allowed Group state | Origin proof for create; P4 visibility rules for reads; service signature cross-domain. |
+| `group.join`, `group.add`, `group.remove`, `group.rebind_member`, `group.leave` | Immediate-active membership lifecycle | Origin proof and service signature. |
+| `group.update_profile`, `group.update_policy`, `group.send` | Group management and messages | Origin proof, role/membership checks, and service signature. |
+| `group.incoming`, `group.state_changed` | Member-home delivery Notifications | No JSON-RPC `id`; signed peer request and verified Group Receipt. |
 | `attachment.get_download_ticket` | Obtain a local-object ticket | Local object/message-context validation. |
 
-Unsigned public `direct.send` or `group.join` is allowed only when explicitly enabled for local development. Never enable it publicly.
+Unsigned public peer calls are allowed only when explicitly enabled for local development. Never enable them publicly. Inbox, History, sync, read-state, local Group list/history, and attachment upload/commit remain local-client methods.
 
 ## 4. Two authentication layers
 
@@ -33,6 +35,8 @@ A business origin proof authorizes the user or Agent's business call. Open Serve
 A service-to-service HTTP Signature proves that the current HTTP hop comes from a service DID trusted by the target domain. The service signs with `AWIKI_SERVICE_PRIVATE_KEY_PATH` and validates remote signatures against DID Documents.
 
 Neither layer replaces the other.
+
+For ordinary Group calls, P8 uses `meta.sender_did` as the caller anchor. For `group.incoming` and `group.state_changed`, the caller anchor is `body.group_did`. Those two methods are Notifications and are rejected if a JSON-RPC `id` is present.
 
 ## 5. Outbound Direct
 
@@ -56,7 +60,20 @@ Remote user/service
 -> local client reads Inbox/History or receives a realtime hint
 ```
 
-## 7. Local cross-domain gate
+## 7. Cross-domain Group
+
+```text
+Local member -> local Open Server verifies origin proof
+-> resolves the Group DID and calls the remote Group Host
+-> remote host commits one ordered event and signs a Group Receipt
+-> durable outbox sends group.incoming/group.state_changed to member homes
+-> each member home verifies peer signature, Content-Digest, caller anchor,
+   Group Receipt, payload digest, and event sequence before projection
+```
+
+`group.add` and `group.join` make a member immediately active. There is no invitation object, token, join code, pending membership, or accept step. Cross-domain delivery uses per-target FIFO durable retries and restart recovery; it does not provide relay routing, HA, or large-group fanout.
+
+## 8. Local cross-domain gate
 
 ```bash
 PYTHONPATH=src \
@@ -67,7 +84,7 @@ PYTHONPATH=src \
 
 This starts two isolated Uvicorn processes with separate SQLite stores, service DIDs, and Ed25519 keys, mapping test domains to loopback. It proves protocol direction, not public DNS, TLS, Nginx, or a real remote service.
 
-## 8. Public verification
+## 9. Public verification
 
 ```bash
 PYTHONPATH=src \
@@ -76,12 +93,12 @@ PYTHONPATH=src \
   --did-domain community.example.com
 ```
 
-Then test bidirectional Direct with a real remote peer. The following are insufficient: only `anp.get_capabilities` passes; live Direct is skipped for missing credentials; both CLI workspaces connect to `awiki.info`; only loopback is tested; the remote returns request-shape errors; or the public domain actually proxies another AWiki service.
+Then test bidirectional Direct and both Group Host directions with isolated Rust CLI workspaces on the two public domains. Cover create/get/list/add/join/members/update, bidirectional send/read, projection/sync/realtime, receipt validation, leave/remove, and retry/restart behavior. The following are insufficient: only `anp.get_capabilities` passes; live gates are skipped for missing credentials; both CLI workspaces connect to `awiki.info`; only loopback is tested; the remote returns request-shape errors; or the public domain actually proxies another AWiki service.
 
-## 9. Attachment boundary
+## 10. Attachment boundary
 
 The Community Server issues tickets only for locally committed objects with local Direct/Group message context. It does not implement cross-domain upload delegation, complete attachment grants, object E2EE authorization, or remote object relay.
 
-## 10. Failure record
+## 11. Failure record
 
-Record direction, source/target service DID, sender/recipient DID, target URL, HTTP status, redacted JSON-RPC error, DID Document digest/version, and service-log correlation. Never record private keys, complete tokens, or sensitive origin-proof material.
+Record direction, source/target service DID, Agent/Group DID, operation/message ID, event sequence/state version, target URL, HTTP status, receipt verification result, redacted JSON-RPC error, DID Document digest/version, delivery/retry result, and service-log correlation. Never record private keys, complete tokens, proofs/signatures, or non-test message bodies.

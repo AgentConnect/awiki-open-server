@@ -80,8 +80,16 @@ def test_verify_public_accepts_open_server_surface(monkeypatch, capsys):
         assert method == "anp.get_capabilities"
         return {
             "service_did": "did:wba:rwiki.cn",
-            "features": {"cross_domain_direct": {"enabled": True}},
-            "disabled_features": {"federation": "commercial"},
+            "features": {
+                "cross_domain_direct": {"enabled": True},
+                "cross_domain_group": {"enabled": True, "mode": "did_discovery_direct_call"},
+                "group_participant": {
+                    "enabled": True,
+                    "management": True,
+                    "join_modes": ["open-join", "admin-add"],
+                },
+            },
+            "disabled_features": {"federation_relay": "commercial"},
         }
 
     monkeypatch.setattr(awiki_open_cli, "http_get_json", fake_http_get_json)

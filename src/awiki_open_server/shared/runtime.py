@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ipaddress
 import json
+import socket
 from typing import Any
 import urllib.parse
 import urllib.request
@@ -54,8 +56,32 @@ def _did_document_url(did: str, resolver_base_urls: dict[str, str] | None = None
     return f"https://{domain}/{path}/did.json"
 
 
-def _http_get_json(url: str) -> dict[str, Any]:
+def _validate_outbound_url(url: str, *, allow_private: bool = False) -> None:
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.username or parsed.password:
+        raise InvalidParams("outbound_url_userinfo_not_allowed")
+    if parsed.scheme not in ({"http", "https"} if allow_private else {"https"}):
+        raise InvalidParams("outbound_url_scheme_not_allowed")
+    hostname = parsed.hostname
+    if not hostname:
+        raise InvalidParams("outbound_url_host_required")
+    try:
+        addresses = {
+            ipaddress.ip_address(item[4][0])
+            for item in socket.getaddrinfo(hostname, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        }
+    except (OSError, ValueError) as exc:
+        raise InvalidParams("outbound_url_host_unresolvable", data={"host": hostname}) from exc
+    if not allow_private:
+        for address in addresses:
+            if not address.is_global:
+                raise InvalidParams("outbound_url_private_address_not_allowed", data={"host": hostname})
+
+
+def _http_get_json(url: str, *, allow_private: bool = False) -> dict[str, Any]:
+    _validate_outbound_url(url, allow_private=allow_private)
     with urllib.request.urlopen(url, timeout=15) as response:
+        _validate_outbound_url(response.geturl(), allow_private=allow_private)
         data = json.loads(response.read().decode())
     if not isinstance(data, dict):
         raise InvalidParams("did_document_must_be_object")
@@ -71,7 +97,10 @@ def _http_post_json(url: str, payload: dict[str, Any], headers: dict[str, str] |
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=15) as response:
-        data = json.loads(response.read().decode())
+        raw = response.read()
+        if not raw:
+            return {}
+        data = json.loads(raw.decode())
     if not isinstance(data, dict):
         raise InvalidParams("remote_response_must_be_object")
     return data
@@ -97,16 +126,30 @@ def _anp_message_service(document: dict[str, Any]) -> dict[str, Any]:
     return matches[0]
 
 
+def _fetch_did_document(did: str, settings: Settings) -> dict[str, Any]:
+    domain = _did_domain(did)
+    resolver_map = settings.did_resolver_base_urls or {}
+    allow_private = domain in resolver_map
+    url = _did_document_url(did, resolver_map)
+    if allow_private:
+        return _http_get_json(url, allow_private=True)
+    return _http_get_json(url)
+
+
 def _discover_anp_service(did: str, settings: Settings) -> dict[str, Any]:
     try:
-        document = _http_get_json(_did_document_url(did, settings.did_resolver_base_urls))
+        document = _fetch_did_document(did, settings)
     except Exception as exc:
         if isinstance(exc, (InvalidParams, NotFound)):
             raise
         raise NotFound("did_document_not_found", data={"did": did, "detail": str(exc)}) from exc
     if document.get("id") not in (None, did):
         raise InvalidParams("did_document_id_mismatch", data={"did": did, "document_id": document.get("id")})
-    return _anp_message_service(document)
+    service = _anp_message_service(document)
+    endpoint = str(service["serviceEndpoint"])
+    allow_private = _did_domain(did) in (settings.did_resolver_base_urls or {})
+    _validate_outbound_url(endpoint, allow_private=allow_private)
+    return service
 
 
 def _public_url(settings: Settings, path: str) -> str:
@@ -139,7 +182,7 @@ def _resolve_did_document_for_proof(request: Request, did: str) -> dict[str, Any
             raise InvalidParams("did_document_must_be_object")
         return document
     try:
-        document = _http_get_json(_did_document_url(did, get_settings(request).did_resolver_base_urls))
+        document = _fetch_did_document(did, get_settings(request))
     except Exception as exc:
         if isinstance(exc, InvalidParams):
             raise
@@ -156,7 +199,12 @@ def _source_service_did(headers: dict[str, str]) -> str | None:
     return None
 
 
-def _verify_peer_request_signature(request: Request, settings: Settings) -> None:
+def _verify_peer_request_signature(
+    request: Request,
+    settings: Settings,
+    *,
+    caller_anchor: str | None = None,
+) -> None:
     headers = dict(request.headers)
     require_signed_peer_request(headers, allow_unsigned_dev=settings.allow_unsigned_peer_dev)
     if settings.allow_unsigned_peer_dev:
@@ -164,7 +212,15 @@ def _verify_peer_request_signature(request: Request, settings: Settings) -> None
     service_did = _source_service_did(headers)
     if not service_did:
         raise Unauthorized("missing_source_service_did")
-    document = _http_get_json(_did_document_url(service_did, settings.did_resolver_base_urls))
+    if caller_anchor:
+        caller_service = _discover_anp_service(caller_anchor, settings)
+        expected_service_did = caller_service.get("serviceDid")
+        if service_did != expected_service_did:
+            raise Unauthorized(
+                "source_service_did_caller_anchor_mismatch",
+                data={"expected": expected_service_did, "actual": service_did},
+            )
+    document = _fetch_did_document(service_did, settings)
     if document.get("id") != service_did:
         raise Unauthorized("source_service_did_document_mismatch")
     public_url = f"{settings.public_base_url.rstrip('/')}{request.url.path}"

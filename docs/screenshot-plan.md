@@ -27,7 +27,7 @@ Use README Mermaid as the source of truth. A Social Preview may export `open-ser
 ## 4. Public verification result (optional)
 
 - File: `open-server-public-verify.png`
-- Show passing DID Document, health, capability, and federation-disabled checks.
+- Show passing DID Document, minimal health, capability, enabled Direct/Group DID-discovery modes, and disabled relay/E2EE checks.
 - Use a dedicated demo/public test domain.
 - Do not expose real tokens, recipients, or private server paths.
 

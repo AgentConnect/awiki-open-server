@@ -91,7 +91,7 @@ def _origin_proof(
 
 
 def test_protocol_adapter_requires_anp_sdk_088():
-    assert ANP_SDK_VERSION == REQUIRED_ANP_SDK_VERSION == "0.8.8"
+    assert ANP_SDK_VERSION == REQUIRED_ANP_SDK_VERSION == "0.8.9"
 
 
 def test_service_http_signature_uses_anp_sdk_generation_and_verification():

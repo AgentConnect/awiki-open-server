@@ -264,6 +264,7 @@ def start_open_server(
     domain: str,
     private_key_pem: str,
     resolver_map: dict[str, str],
+    public_base_url: str | None = None,
 ) -> subprocess.Popen:
     env = os.environ.copy()
     repo_root = Path(__file__).resolve().parents[1]
@@ -274,7 +275,7 @@ def start_open_server(
         {
             "PYTHONPATH": os.pathsep.join(python_path_entries),
             "AWIKI_DATA_DIR": str(data_dir),
-            "AWIKI_PUBLIC_BASE_URL": f"http://127.0.0.1:{port}",
+            "AWIKI_PUBLIC_BASE_URL": public_base_url or f"http://127.0.0.1:{port}",
             "AWIKI_DID_DOMAIN": domain,
             "AWIKI_SERVICE_DID": f"did:wba:{domain}",
             "AWIKI_SERVICE_PRIVATE_KEY_PEM": private_key_pem.replace("\n", "\\n"),
@@ -301,48 +302,6 @@ def start_open_server(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-    )
-
-
-def write_rust_cli_config(workspace: Path, *, base_url: str, did_domain: str) -> None:
-    workspace.mkdir(parents=True, exist_ok=True)
-    (workspace / "config.yaml").write_text(
-        f"""schema_version: 1
-identity:
-  active: ""
-runtime:
-  mode: websocket
-  socket_path: ""
-  listener:
-    enabled: false
-    auto_install: false
-    auto_start: false
-  host_notify:
-    enabled: false
-    sink: log
-    file_path: ""
-    openclaw:
-      hook_url: ""
-      agent_id: main
-      hook_name: AWiki
-      token: ""
-    hermes:
-      notify_url: http://127.0.0.1:8765/notify/host-event
-      secret: ""
-output:
-  format: json
-  no_color: true
-services:
-  service_base_url: {base_url}
-  user_service_endpoint: {base_url}
-  message_service_endpoint: {base_url}
-  did_domain: {did_domain}
-  anp_service_endpoint: {base_url.rstrip('/')}/anp-im/rpc
-  anp_service_did: did:wba:{did_domain}
-  ca_bundle: ""
-  mail_service_url: {base_url}
-""",
-        encoding="utf-8",
     )
 
 
@@ -389,11 +348,55 @@ def rust_cli_json(cli_bin: str, workspace: Path, home: Path, *args: str) -> dict
     return parsed
 
 
+def initialize_rust_cli_workspace(
+    cli_bin: str,
+    workspace: Path,
+    home: Path,
+    *,
+    base_url: str,
+    did_domain: str,
+) -> None:
+    rust_cli_json(
+        cli_bin,
+        workspace,
+        home,
+        "tenant",
+        "create",
+        "local",
+        "--backend-base-url",
+        base_url,
+        "--did-host",
+        did_domain,
+    )
+    rust_cli_json(cli_bin, workspace, home, "tenant", "use", "local")
+    resolved = rust_cli_json(cli_bin, workspace, home, "config", "show").get("data") or {}
+    expected = {
+        "service_base_url": base_url,
+        "did_domain": did_domain,
+        "anp_service_endpoint": f"{base_url.rstrip('/')}/anp-im/rpc",
+        "anp_service_did": f"did:wba:{did_domain}",
+    }
+    actual = {key: resolved.get(key) for key in expected}
+    if actual != expected:
+        raise RuntimeError(
+            "rust cli workspace resolved unexpected service configuration: "
+            + json.dumps({"expected": expected, "actual": actual}, ensure_ascii=False)
+        )
+
+
 def rust_register_did(result: dict[str, Any]) -> str:
     did = (((result.get("data") or {}).get("identity") or {}).get("did"))
     if not isinstance(did, str) or not did:
         raise RuntimeError("rust cli id register response missing data.identity.did")
     return did
+
+
+def rust_group_did(result: dict[str, Any]) -> str:
+    group = ((result.get("data") or {}).get("group") or {})
+    group_did = group.get("group_did") if isinstance(group, dict) else None
+    if not isinstance(group_did, str) or not group_did:
+        raise RuntimeError("rust cli group response missing data.group.group_did")
+    return group_did
 
 
 def rust_message_id(result: dict[str, Any]) -> str:
@@ -421,6 +424,59 @@ def assert_message_visible(result: dict[str, Any], *, message_id: str, text: str
     raise RuntimeError(f"message {message_id} with expected text not visible")
 
 
+def assert_group_visible(result: dict[str, Any], *, group_did: str) -> None:
+    groups = ((result.get("data") or {}).get("groups") or [])
+    if any(isinstance(group, dict) and group.get("group_did") == group_did for group in groups):
+        return
+    raise RuntimeError(f"group {group_did} not visible in rust cli group list")
+
+
+def assert_active_member(result: dict[str, Any], *, member_did: str) -> None:
+    members = ((result.get("data") or {}).get("members") or [])
+    for member in members:
+        if not isinstance(member, dict):
+            continue
+        did = member.get("member_did") or member.get("agent_did") or member.get("did")
+        if did == member_did and member.get("status", "active") == "active":
+            return
+    raise RuntimeError(f"active member {member_did} not visible in rust cli group members")
+
+
+def assert_rust_cli_fails(
+    cli_bin: str,
+    workspace: Path,
+    home: Path,
+    *args: str,
+    expected: str,
+) -> None:
+    env = os.environ.copy()
+    env.update({"HOME": str(home), "AWIKI_CLI_WORKSPACE_HOME_DIR": str(workspace)})
+    completed = subprocess.run(
+        [cli_bin, *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if completed.returncode == 0:
+        raise RuntimeError(f"rust cli command unexpectedly succeeded: {list(args)}")
+    output = f"{completed.stdout}\n{completed.stderr}"
+    if expected not in output:
+        raise RuntimeError(
+            "rust cli command failed for an unexpected reason: "
+            + json.dumps(
+                {
+                    "args": list(args),
+                    "expected": expected,
+                    "returncode": completed.returncode,
+                    "stdout": completed.stdout[-2000:],
+                    "stderr": completed.stderr[-2000:],
+                },
+                ensure_ascii=False,
+            )
+        )
+
+
 def china_dev_phone() -> str:
     return f"138{uuid.uuid4().int % 100000000:08d}"
 
@@ -428,7 +484,7 @@ def china_dev_phone() -> str:
 def smoke_rust_cli_local(args: argparse.Namespace) -> int:
     cli_bin = resolve_executable(args.awiki_cli_bin)
     port = args.port or free_port()
-    base_url = f"http://127.0.0.1:{port}"
+    base_url = f"http://localhost:{port}"
     did_domain = args.did_domain
     root = Path(args.data_root) if args.data_root else Path(tempfile.mkdtemp(prefix="awiki-open-rust-cli-"))
     if args.clean and root.exists():
@@ -437,22 +493,43 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
     home = root / "home"
     alice_workspace = root / "cli-alice"
     bob_workspace = root / "cli-bob"
+    charlie_workspace = root / "cli-charlie"
     server_data = root / "server"
-    write_rust_cli_config(alice_workspace, base_url=base_url, did_domain=did_domain)
-    write_rust_cli_config(bob_workspace, base_url=base_url, did_domain=did_domain)
-
     process = start_open_server(
         data_dir=server_data,
         port=port,
         domain=did_domain,
         private_key_pem=generate_ed25519_private_key_pem(),
         resolver_map={did_domain: base_url},
+        public_base_url=base_url,
     )
     try:
         wait_health(base_url, process)
+        initialize_rust_cli_workspace(
+            cli_bin,
+            alice_workspace,
+            home,
+            base_url=base_url,
+            did_domain=did_domain,
+        )
+        initialize_rust_cli_workspace(
+            cli_bin,
+            bob_workspace,
+            home,
+            base_url=base_url,
+            did_domain=did_domain,
+        )
+        initialize_rust_cli_workspace(
+            cli_bin,
+            charlie_workspace,
+            home,
+            base_url=base_url,
+            did_domain=did_domain,
+        )
         prefix = args.handle_prefix
         alice_handle = unique_handle(f"{prefix}-alice")
         bob_handle = unique_handle(f"{prefix}-bob")
+        charlie_handle = unique_handle(f"{prefix}-charlie")
         alice_register = rust_cli_json(
             cli_bin,
             alice_workspace,
@@ -479,8 +556,22 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
             "--otp",
             "123456",
         )
+        charlie_register = rust_cli_json(
+            cli_bin,
+            charlie_workspace,
+            home,
+            "id",
+            "register",
+            "--handle",
+            charlie_handle,
+            "--phone",
+            china_dev_phone(),
+            "--otp",
+            "123456",
+        )
         alice_did = rust_register_did(alice_register)
         bob_did = rust_register_did(bob_register)
+        charlie_did = rust_register_did(charlie_register)
 
         direct_text = "hello from rust cli local smoke"
         direct_send = rust_cli_json(cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did, "--text", direct_text)
@@ -490,13 +581,157 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
         assert_message_visible(bob_inbox, message_id=direct_message_id, text=direct_text)
         assert_message_visible(bob_history, message_id=direct_message_id, text=direct_text)
 
-        group_did = default_group_did(did_domain)
-        group_text = "hello group from rust cli local smoke"
-        rust_cli_json(cli_bin, alice_workspace, home, "group", "join", "--group", group_did)
-        group_send = rust_cli_json(cli_bin, alice_workspace, home, "msg", "send", "--group", group_did, "--text", group_text)
-        group_message_id = rust_message_id(group_send)
-        group_messages = rust_cli_json(cli_bin, alice_workspace, home, "group", "messages", "--group", group_did, "--limit", "10")
-        assert_message_visible(group_messages, message_id=group_message_id, text=group_text)
+        group_name = f"Rust CLI Group {uuid.uuid4().hex[:8]}"
+        created_group = rust_cli_json(
+            cli_bin,
+            alice_workspace,
+            home,
+            "group",
+            "create",
+            "--name",
+            group_name,
+            "--discoverability",
+            "private",
+            "--admission-mode",
+            "admin-add",
+            "--max-members",
+            "100",
+        )
+        group_did = rust_group_did(created_group)
+        group_get = rust_cli_json(cli_bin, alice_workspace, home, "group", "get", "--group", group_did)
+        if rust_group_did(group_get) != group_did:
+            raise RuntimeError("rust cli group get returned the wrong group")
+        group_list = rust_cli_json(cli_bin, alice_workspace, home, "group", "list", "--limit", "20")
+        assert_group_visible(group_list, group_did=group_did)
+
+        rust_cli_json(
+            cli_bin,
+            alice_workspace,
+            home,
+            "group",
+            "add",
+            "--group",
+            group_did,
+            "--member",
+            bob_did,
+            "--role",
+            "member",
+        )
+        members_after_add = rust_cli_json(
+            cli_bin, bob_workspace, home, "group", "members", "--group", group_did, "--limit", "10"
+        )
+        assert_active_member(members_after_add, member_did=bob_did)
+
+        updated_name = f"{group_name} Updated"
+        rust_cli_json(
+            cli_bin,
+            alice_workspace,
+            home,
+            "group",
+            "update",
+            "--group",
+            group_did,
+            "--name",
+            updated_name,
+            "--admission-mode",
+            "open-join",
+        )
+        updated_group = rust_cli_json(cli_bin, alice_workspace, home, "group", "get", "--group", group_did)
+        updated_snapshot = ((updated_group.get("data") or {}).get("group") or {})
+        if updated_snapshot.get("name") != updated_name:
+            raise RuntimeError("rust cli group update did not persist the new name")
+
+        rust_cli_json(cli_bin, charlie_workspace, home, "group", "join", "--group", group_did)
+        members_after_join = rust_cli_json(
+            cli_bin, charlie_workspace, home, "group", "members", "--group", group_did, "--limit", "10"
+        )
+        assert_active_member(members_after_join, member_did=charlie_did)
+
+        alice_group_text = "hello group from rust cli owner"
+        alice_client_message_id = f"msg-{uuid.uuid4().hex}"
+        alice_group_send = rust_cli_json(
+            cli_bin,
+            alice_workspace,
+            home,
+            "msg",
+            "send",
+            "--group",
+            group_did,
+            "--text",
+            alice_group_text,
+            "--client-message-id",
+            alice_client_message_id,
+        )
+        alice_group_message_id = rust_message_id(alice_group_send)
+        if alice_group_message_id != alice_client_message_id:
+            raise RuntimeError("rust cli group send did not preserve client-message-id")
+
+        bob_group_text = "hello group from rust cli added member"
+        bob_group_send = rust_cli_json(
+            cli_bin,
+            bob_workspace,
+            home,
+            "msg",
+            "send",
+            "--group",
+            group_did,
+            "--text",
+            bob_group_text,
+            "--client-message-id",
+            f"msg-{uuid.uuid4().hex}",
+        )
+        bob_group_message_id = rust_message_id(bob_group_send)
+        for workspace in (alice_workspace, bob_workspace, charlie_workspace):
+            group_messages = rust_cli_json(
+                cli_bin, workspace, home, "group", "messages", "--group", group_did, "--limit", "20"
+            )
+            assert_message_visible(
+                group_messages,
+                message_id=alice_group_message_id,
+                text=alice_group_text,
+            )
+            assert_message_visible(
+                group_messages,
+                message_id=bob_group_message_id,
+                text=bob_group_text,
+            )
+
+        rust_cli_json(cli_bin, charlie_workspace, home, "group", "leave", "--group", group_did)
+        assert_rust_cli_fails(
+            cli_bin,
+            charlie_workspace,
+            home,
+            "msg",
+            "send",
+            "--group",
+            group_did,
+            "--text",
+            "must fail after leave",
+            expected="group.not_member",
+        )
+        rust_cli_json(
+            cli_bin,
+            alice_workspace,
+            home,
+            "group",
+            "remove",
+            "--group",
+            group_did,
+            "--member",
+            bob_did,
+        )
+        assert_rust_cli_fails(
+            cli_bin,
+            bob_workspace,
+            home,
+            "msg",
+            "send",
+            "--group",
+            group_did,
+            "--text",
+            "must fail after removal",
+            expected="group.not_member",
+        )
 
         rust_cli_json(cli_bin, alice_workspace, home, "people", "follow", bob_did)
         people_status = rust_cli_json(cli_bin, alice_workspace, home, "people", "status", bob_did)
@@ -528,10 +763,13 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
             "data_root": str(root),
             "alice": {"handle": alice_handle, "did": alice_did},
             "bob": {"handle": bob_handle, "did": bob_did},
+            "charlie": {"handle": charlie_handle, "did": charlie_did},
+            "group_did": group_did,
             "verified": [
                 "rust cli id register via /user-service/did-auth/rpc with placeholder phone/otp CLI args; server does not run contact verification",
                 "direct msg send, inbox, and history through /im/rpc",
-                "group join, group msg send, and group messages",
+                "hosted group create/get/list/add/update/join/members/send/messages/leave/remove lifecycle",
+                "group client-message-id preservation and post-leave/post-remove authorization denial",
                 "people follow/status/following/followers through /user-service/did/relationships/rpc",
                 "site root/page commands through /site/rpc",
             ],
@@ -715,7 +953,12 @@ def smoke_local(args: argparse.Namespace) -> int:
     base = args.base_url
     caps = rpc(base, "/im/rpc", "anp.get_capabilities")
     assert caps["features"]["group_participant"]["enabled"] is True
-    assert caps["features"]["group_participant"]["management"] is False
+    assert caps["features"]["group_participant"]["management"] is True
+    assert caps["features"]["group_participant"]["join_modes"] == ["open-join", "admin-add"]
+    assert caps["features"]["cross_domain_group"] == {
+        "enabled": True,
+        "mode": "did_discovery_direct_call",
+    }
 
     alice_handle = unique_handle(args.alice)
     bob_handle = unique_handle(args.bob)
@@ -824,6 +1067,12 @@ async def _smoke_asgi_async(args: argparse.Namespace) -> int:
 
         caps = await arpc("/im/rpc", "anp.get_capabilities")
         assert caps["features"]["group_participant"]["enabled"] is True
+        assert caps["features"]["group_participant"]["management"] is True
+        assert caps["features"]["group_participant"]["join_modes"] == ["open-join", "admin-add"]
+        assert caps["features"]["cross_domain_group"] == {
+            "enabled": True,
+            "mode": "did_discovery_direct_call",
+        }
         alice_handle = unique_handle(args.alice)
         bob_handle = unique_handle(args.bob)
         alice = await arpc("/did-auth/rpc", "register", {"handle": alice_handle})
@@ -897,8 +1146,23 @@ def verify_public(args: argparse.Namespace) -> int:
         add_check("anp_get_capabilities", caps.get("service_did") == expected_service_did, service_did=caps.get("service_did"))
         features = caps.get("features") if isinstance(caps.get("features"), dict) else {}
         add_check("cross_domain_direct_enabled", bool((features.get("cross_domain_direct") or {}).get("enabled")))
+        group_feature = features.get("group_participant") or {}
+        add_check(
+            "community_group_management_enabled",
+            group_feature.get("enabled") is True
+            and group_feature.get("management") is True
+            and group_feature.get("join_modes") == ["open-join", "admin-add"],
+            group_participant=group_feature,
+        )
+        cross_domain_group = features.get("cross_domain_group") or {}
+        add_check(
+            "cross_domain_group_direct_call_enabled",
+            cross_domain_group.get("enabled") is True
+            and cross_domain_group.get("mode") == "did_discovery_direct_call",
+            cross_domain_group=cross_domain_group,
+        )
         disabled = caps.get("disabled_features") if isinstance(caps.get("disabled_features"), dict) else {}
-        add_check("federation_disabled", "federation" in disabled, disabled_features=disabled)
+        add_check("federation_relay_disabled", "federation_relay" in disabled, disabled_features=disabled)
     except Exception as exc:
         add_check("anp_get_capabilities", False, error=str(exc))
 

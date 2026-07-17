@@ -24,7 +24,8 @@ That command verifies:
 - The `ANPMessageService.serviceEndpoint` is `https://rwiki.cn/anp-im/rpc`.
 - `/healthz` responds with `status=ok`.
 - `/anp-im/rpc` responds to `anp.get_capabilities`.
-- `federation` is declared disabled.
+- Cross-domain Group is declared as DID-discovery direct-call mode; federation
+  relay and peer-route infrastructure remain disabled.
 - Contact-verification compatibility remains disabled; no phone/email provider
   or Aliyun integration is configured.
 
@@ -56,18 +57,24 @@ That command verifies:
 6. Keep `AWIKI_ALLOW_UNSIGNED_PEER_DEV=false`; local user DID documents should
    be e1 DIDs under `AWIKI_DID_DOMAIN`, and uploaded DID documents should carry
    proof.
-7. Confirm attachment limits in the env file:
+7. Create a separate random operations token outside the repository, protect it
+   as mode `0600`, and set only `AWIKI_OPERATIONS_TOKEN_FILE` in the env file.
+8. Confirm attachment and Group limits in the env file:
    `AWIKI_MAX_ATTACHMENT_BYTES` and `AWIKI_ATTACHMENT_ALLOWED_MIME_TYPES`.
-8. Start the app on `127.0.0.1:8766`.
-9. Configure nginx with routes from `deploy/nginx-rwiki.cn.conf.example`.
-10. Confirm every `proxy_pass` targets `127.0.0.1:8766`; `awiki.info` is only a
+9. Start the app on `127.0.0.1:8766`.
+10. Configure nginx with routes from `deploy/nginx-rwiki.cn.conf.example`.
+11. Confirm every `proxy_pass` targets `127.0.0.1:8766`; `awiki.info` is only a
    remote interoperability peer, not a backend.
-11. Run `nginx -t` and reload nginx.
-12. Run `verify-public`.
-13. Configure one Rust CLI workspace for `https://rwiki.cn` and another for `https://awiki.info`.
-14. Register a test user on each side and verify direct send, inbox, and history in both directions.
+12. Run `nginx -t` and reload nginx.
+13. Run `verify-public`.
+14. Verify `/operations/status` returns `401` without its bearer token, returns
+    aggregate diagnostics with the token, and that `/healthz` stays minimal.
+15. Configure isolated Rust CLI workspaces for `https://rwiki.cn` and `https://awiki.info`.
+16. Verify Direct plus both Group Host directions, including create/add/join,
+    profile/policy changes, bidirectional messages, projection, leave, remove,
+    outbox retry, and receipt validation.
 
-If step 14 fails after `verify-public` passes, record the request direction, sender DID,
+If the interoperability gate fails after `verify-public` passes, record the request direction, sender DID,
 recipient DID, target URL, RPC error body, and service logs before changing any sibling
 service.
 

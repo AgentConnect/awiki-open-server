@@ -40,7 +40,9 @@
 
 - [ ] Record the verification date and each component version or commit.
 - [ ] Verify AWiki Me to hosted-service direct, group, attachment, and contact behavior.
-- [ ] Verify awiki-cli to Open Server identity, direct message, group participation, attachment, people, and site behavior.
+- [ ] Verify awiki-cli to Open Server identity, Direct, complete Community Group lifecycle, attachment, people, and site behavior.
+- [ ] Verify Open Server-hosted and remote-hosted Groups through isolated public-domain workspaces, including add/join, bidirectional messages, projection, receipts, leave/remove, retry, and restart recovery.
+- [ ] Verify `/operations/status` is independently protected, `/healthz` remains minimal, and no token/proof/signature/message body appears in logs or reports.
 - [ ] Verify the AWiki Me to Open Server custom-tenant workflow or mark it explicitly as unverified.
 - [ ] State Agent/Daemon behavior on self-hosted domains outside the allowlist.
 - [ ] Do not describe Web as an available product platform.

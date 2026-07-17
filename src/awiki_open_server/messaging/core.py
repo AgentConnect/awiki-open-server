@@ -8,9 +8,31 @@ from fastapi import Request
 
 from awiki_open_server.app.settings import Settings
 from awiki_open_server.attachments.core import ATTACHMENT_HANDLERS
+from awiki_open_server.messaging.groups import (
+    hosted_group_add,
+    hosted_group_create,
+    hosted_group_get_info,
+    hosted_group_join,
+    hosted_group_leave,
+    hosted_group_list_members,
+    hosted_group_list_messages,
+    hosted_group_list,
+    hosted_group_remove,
+    hosted_group_rebind_member,
+    hosted_group_send,
+    hosted_group_update_policy,
+    hosted_group_update_profile,
+    has_group_projection,
+    is_hosted_group,
+    projected_group_get,
+    projected_group_list_members,
+    projected_group_list_messages,
+)
+from awiki_open_server.messaging.groups.inbound import INBOUND_GROUP_HANDLERS
+from awiki_open_server.messaging.groups.routing import forward_group_command, refresh_remote_group_members
 from awiki_open_server.service_identity import validate_origin_proof_structure
 from awiki_open_server.shared import runtime
-from awiki_open_server.shared.errors import Conflict, InvalidParams, NotFound, NotSupported, Unauthorized
+from awiki_open_server.shared.errors import AwikiError, Conflict, InvalidParams, NotFound, NotSupported, Unauthorized
 from awiki_open_server.shared.ids import new_id, now_iso
 from awiki_open_server.user_compat.core import current_did, get_settings, get_store
 
@@ -105,6 +127,7 @@ def capabilities(_: dict[str, Any], request: Request) -> dict[str, Any]:
         },
         "proof_policies": {
             "direct_base_origin_proof": "required_for_cross_domain",
+            "group_base_origin_proof": "required_for_all_mutations_and_send",
             "direct_e2ee_origin_proof": "not_supported",
             "service_http_signature": "required_for_cross_domain",
         },
@@ -112,14 +135,22 @@ def capabilities(_: dict[str, Any], request: Request) -> dict[str, Any]:
         "group_e2ee": {"enabled": False, "reason": "community_edition"},
         "features": {
             "cross_domain_direct": {"enabled": True, "mode": "did_discovery_direct_call"},
+            "cross_domain_group": {"enabled": True, "mode": "did_discovery_direct_call"},
             "group_participant": {
                 "enabled": True,
-                "management": False,
-                "join_modes": ["open_join", "invite_token"],
+                "management": True,
+                "join_modes": ["open-join", "admin-add"],
+                "max_members": "100",
                 "supported_methods": [
+                    "group.create",
                     "group.get_info",
                     "group.join",
+                    "group.add",
+                    "group.remove",
+                    "group.rebind_member",
                     "group.leave",
+                    "group.update_profile",
+                    "group.update_policy",
                     "group.send",
                     "group.get",
                     "group.list",
@@ -130,9 +161,10 @@ def capabilities(_: dict[str, Any], request: Request) -> dict[str, Any]:
         },
         "disabled_features": {
             "direct_e2ee": "commercial",
-            "group_management": "commercial",
-            "group_e2ee": "commercial",
-            "federation": "commercial",
+            "group_e2ee": "not_supported_in_community_v1",
+            "large_group_fanout": "commercial",
+            "group_ha": "commercial",
+            "federation_relay": "commercial",
             "managed_runtime_agents": "commercial",
             "tenant_site_hosting": "commercial",
         },
@@ -537,7 +569,7 @@ def direct_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
             body=proof_body,
             sender_did_document=_resolve_did_document_for_proof(request, sender),
         )
-        _verify_peer_request_signature(request, settings)
+        _verify_peer_request_signature(request, settings, caller_anchor=sender)
         if _is_daemon_heartbeat(meta, proof_body, content_type):
             return _accept_ephemeral_direct(
                 request,
@@ -960,8 +992,10 @@ def group_join(params: dict[str, Any], request: Request) -> dict[str, Any]:
     if not did:
         raise InvalidParams("sender_did_required")
     group = group_get_info(params, request)
+    if any(key in params for key in ("invite_token", "join_token", "join_code")):
+        raise NotSupported("group.join_credentials_not_supported")
     if public_rpc:
-        proof_body = envelope_body or {"group_did": group["group_did"], **({"invite_token": params.get("invite_token")} if params.get("invite_token") else {})}
+        proof_body = envelope_body or {"group_did": group["group_did"]}
         validate_origin_proof_structure(
             auth,
             method="group.join",
@@ -969,9 +1003,9 @@ def group_join(params: dict[str, Any], request: Request) -> dict[str, Any]:
             body=proof_body,
             sender_did_document=_resolve_did_document_for_proof(request, str(did)),
         )
-        _verify_peer_request_signature(request, get_settings(request))
-    if group["join_mode"] == "invite_token" and params.get("invite_token") != group["invite_token"]:
-        raise Unauthorized("invalid_invite_token")
+        _verify_peer_request_signature(request, get_settings(request), caller_anchor=str(did))
+    if group["join_mode"] != "open_join":
+        raise NotSupported("legacy_group_join_mode_not_supported")
     member_events: list[tuple[str, int, str]] = []
     with get_store(request).connect() as conn:
         conn.execute(
@@ -1286,16 +1320,29 @@ def _thread_message_seq(conn: Any, *, owner: str, thread: dict[str, Any], messag
         group_did = thread.get("group_did")
         if not group_did:
             raise InvalidParams("thread_required")
-        member = conn.execute(
-            "SELECT 1 FROM group_members WHERE group_did = ? AND member_did = ?",
-            (group_did, owner),
-        ).fetchone()
+        hosted = conn.execute("SELECT 1 FROM hosted_groups WHERE group_did = ?", (group_did,)).fetchone()
+        if hosted:
+            member = conn.execute(
+                "SELECT 1 FROM hosted_group_members WHERE group_did = ? AND agent_did = ? AND status = 'active'",
+                (group_did, owner),
+            ).fetchone()
+        else:
+            member = conn.execute(
+                "SELECT 1 FROM group_members WHERE group_did = ? AND member_did = ?",
+                (group_did, owner),
+            ).fetchone()
         if not member:
             raise Unauthorized("read_state.group_membership_required")
-        row = conn.execute(
-            "SELECT server_seq FROM group_messages WHERE group_did = ? AND message_id = ?",
-            (group_did, message_id),
-        ).fetchone()
+        if hosted:
+            row = conn.execute(
+                "SELECT group_event_seq AS server_seq FROM hosted_group_messages WHERE group_did = ? AND message_id = ?",
+                (group_did, message_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT server_seq FROM group_messages WHERE group_did = ? AND message_id = ?",
+                (group_did, message_id),
+            ).fetchone()
     else:
         raise InvalidParams("read_state.unsupported_thread_kind")
     if not row:
@@ -1358,23 +1405,36 @@ def _apply_read_watermark(
         group_did = thread.get("group_did")
         if not group_did:
             raise InvalidParams("thread_required")
-        _require_group_member(conn, group_did, owner)
+        hosted = conn.execute("SELECT 1 FROM hosted_groups WHERE group_did = ?", (group_did,)).fetchone()
+        if hosted:
+            member = conn.execute(
+                "SELECT 1 FROM hosted_group_members WHERE group_did = ? AND agent_did = ? AND status = 'active'",
+                (group_did, owner),
+            ).fetchone()
+            if not member:
+                raise Unauthorized("group.not_member")
+            table = "hosted_group_messages"
+            sequence_column = "group_event_seq"
+        else:
+            _require_group_member(conn, group_did, owner)
+            table = "group_messages"
+            sequence_column = "server_seq"
         updated = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) AS count
-            FROM group_messages
+            FROM {table}
             WHERE group_did = ?
-              AND server_seq > ?
-              AND server_seq <= ?
+              AND {sequence_column} > ?
+              AND {sequence_column} <= ?
             """,
             (group_did, previous_seq, saved_seq),
         ).fetchone()
         unread = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) AS count
-            FROM group_messages
+            FROM {table}
             WHERE group_did = ?
-              AND server_seq > ?
+              AND {sequence_column} > ?
             """,
             (group_did, saved_seq),
         ).fetchone()
@@ -1520,11 +1580,29 @@ def thread_after(params: dict[str, Any], request: Request) -> dict[str, Any]:
     with get_store(request).connect() as conn:
         if thread_id.startswith("group:"):
             group_did = thread_id.removeprefix("group:")
-            _require_group_member(conn, group_did, owner)
-            rows = conn.execute(
-                "SELECT * FROM group_messages WHERE group_did = ? AND server_seq > ? ORDER BY server_seq ASC LIMIT ?",
-                (group_did, after, limit + 1),
-            ).fetchall()
+            hosted = conn.execute("SELECT 1 FROM hosted_groups WHERE group_did = ?", (group_did,)).fetchone()
+            if hosted:
+                member = conn.execute(
+                    "SELECT 1 FROM hosted_group_members WHERE group_did = ? AND agent_did = ? AND status = 'active'",
+                    (group_did, owner),
+                ).fetchone()
+                if not member:
+                    raise Unauthorized("group.not_member")
+                rows = conn.execute(
+                    """
+                    SELECT *, group_event_seq AS server_seq
+                    FROM hosted_group_messages
+                    WHERE group_did = ? AND group_event_seq > ?
+                    ORDER BY group_event_seq ASC LIMIT ?
+                    """,
+                    (group_did, after, limit + 1),
+                ).fetchall()
+            else:
+                _require_group_member(conn, group_did, owner)
+                rows = conn.execute(
+                    "SELECT * FROM group_messages WHERE group_did = ? AND server_seq > ? ORDER BY server_seq ASC LIMIT ?",
+                    (group_did, after, limit + 1),
+                ).fetchall()
         else:
             peer = thread_id.removeprefix("direct:")
             rows = conn.execute(
@@ -1540,7 +1618,17 @@ def thread_after(params: dict[str, Any], request: Request) -> dict[str, Any]:
     has_more = len(rows) > limit
     rows = rows[:limit]
     if thread_id.startswith("group:"):
-        messages = [_group_message_result(row) for row in rows]
+        if rows and "receipt_json" in rows[0].keys():
+            messages = [
+                {
+                    **_group_message_result(row),
+                    "group_event_seq": str(row["group_event_seq"]),
+                    "group_receipt": _load(row["receipt_json"]),
+                }
+                for row in rows
+            ]
+        else:
+            messages = [_group_message_result(row) for row in rows]
     else:
         messages = [_direct_message_result(row, owner) for row in rows]
     next_seq = messages[-1]["server_seq"] if messages else after
@@ -1555,6 +1643,135 @@ def thread_after(params: dict[str, Any], request: Request) -> dict[str, Any]:
     }
 
 
+def _group_get_info_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    if is_hosted_group(request, params.get("group_did")):
+        return hosted_group_get_info(params, request)
+    if isinstance(params.get("_anp_meta"), dict) and not _request_is_public_anp(request):
+        return forward_group_command(params, request, method="group.get_info")
+    return group_get_info(params, request)
+
+
+def _legacy_group_exists(request: Request, group_did: str | None) -> bool:
+    if not group_did:
+        return False
+    with get_store(request).connect() as conn:
+        return conn.execute("SELECT 1 FROM groups WHERE group_did = ?", (group_did,)).fetchone() is not None
+
+
+def _group_get_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    if is_hosted_group(request, params.get("group_did")):
+        return hosted_group_get_info(params, request)
+    if has_group_projection(request, params.get("group_did")):
+        return projected_group_get(params, request)
+    return group_get_info(params, request)
+
+
+def _group_join_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    if is_hosted_group(request, params.get("group_did")):
+        return hosted_group_join(params, request)
+    if _legacy_group_exists(request, params.get("group_did")):
+        return group_join(params, request)
+    if isinstance(params.get("_anp_meta"), dict):
+        return forward_group_command(params, request, method="group.join")
+    return group_join(params, request)
+
+
+def _group_leave_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    if _request_is_public_anp(request):
+        return hosted_group_leave(params, request)
+    if is_hosted_group(request, params.get("group_did")):
+        return hosted_group_leave(params, request)
+    if _legacy_group_exists(request, params.get("group_did")):
+        return group_leave(params, request)
+    if isinstance(params.get("_anp_meta"), dict):
+        return forward_group_command(params, request, method="group.leave")
+    return group_leave(params, request)
+
+
+def _group_send_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    if _request_is_public_anp(request):
+        return hosted_group_send(params, request)
+    if is_hosted_group(request, params.get("group_did")):
+        return hosted_group_send(params, request)
+    if _legacy_group_exists(request, params.get("group_did")):
+        return group_send(params, request)
+    if isinstance(params.get("_anp_meta"), dict):
+        return forward_group_command(params, request, method="group.send")
+    return group_send(params, request)
+
+
+def _group_members_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    refresh_status: dict[str, Any] | None = None
+    if is_hosted_group(request, params.get("group_did")):
+        members = hosted_group_list_members(params, request)
+        source = "hosted_projection"
+    elif has_group_projection(request, params.get("group_did")):
+        group_did = params.get("group_did")
+        if not isinstance(group_did, str) or not group_did:
+            raise InvalidParams("group_did_required")
+        try:
+            refreshed = refresh_remote_group_members(request, group_did)
+            refresh_status = {"status": "refreshed" if refreshed else "not_applied"}
+        except AwikiError as exc:
+            refresh_status = {"status": "failed", "error": exc.error_message}
+        members = projected_group_list_members(params, request)
+        source = "remote_projection"
+    else:
+        members = group_members(params, request)
+        source = "legacy_local"
+    result = {"members": members, "total": len(members), "source": source}
+    if refresh_status is not None:
+        result["projection_refresh"] = refresh_status
+    return result
+
+
+def _group_list_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    legacy = group_list(params, request)
+    hosted = hosted_group_list(params, request)
+    groups = [*hosted, *legacy]
+    return {"groups": groups, "total": len(groups), "source": "local_projection"}
+
+
+def _group_messages_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    if is_hosted_group(request, params.get("group_did")):
+        return hosted_group_list_messages(params, request)
+    if has_group_projection(request, params.get("group_did")):
+        return projected_group_list_messages(params, request)
+    return group_messages(params, request)
+
+
+def _host_or_remote_group_command(
+    params: dict[str, Any],
+    request: Request,
+    *,
+    method: str,
+    hosted_handler: Any,
+) -> dict[str, Any]:
+    if is_hosted_group(request, params.get("group_did")) or _request_is_public_anp(request):
+        return hosted_handler(params, request)
+    return forward_group_command(params, request, method=method)
+
+
+def _group_add_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    return _host_or_remote_group_command(params, request, method="group.add", hosted_handler=hosted_group_add)
+
+
+def _group_remove_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    return _host_or_remote_group_command(params, request, method="group.remove", hosted_handler=hosted_group_remove)
+
+
+def _group_rebind_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    return _host_or_remote_group_command(params, request, method="group.rebind_member", hosted_handler=hosted_group_rebind_member)
+
+
+def _group_update_profile_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    return _host_or_remote_group_command(params, request, method="group.update_profile", hosted_handler=hosted_group_update_profile)
+
+
+def _group_update_policy_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    return _host_or_remote_group_command(params, request, method="group.update_policy", hosted_handler=hosted_group_update_policy)
+
+
 MESSAGE_HANDLERS = {
     "anp.get_capabilities": capabilities,
     "direct.send": direct_send,
@@ -1564,21 +1781,23 @@ MESSAGE_HANDLERS = {
     "read_state.mark_read": mark_read,
     "sync.delta": sync_delta,
     "sync.thread_after": thread_after,
-    "group.get_info": group_get_info,
-    "group.join": group_join,
-    "group.leave": group_leave,
-    "group.send": group_send,
-    "group.get": group_get_info,
-    "group.list": group_list,
-    "group.list_members": group_members,
-    "group.list_messages": group_messages,
+    "group.get_info": _group_get_info_dispatch,
+    "group.join": _group_join_dispatch,
+    "group.leave": _group_leave_dispatch,
+    "group.send": _group_send_dispatch,
+    "group.get": _group_get_dispatch,
+    "group.list": _group_list_dispatch,
+    "group.list_members": _group_members_dispatch,
+    "group.list_messages": _group_messages_dispatch,
     **ATTACHMENT_HANDLERS,
+    **INBOUND_GROUP_HANDLERS,
     "direct.e2ee.publish_prekey_bundle": not_supported,
     "direct.e2ee.get_prekey_bundle": not_supported,
     "group.e2ee.publish_key_package": not_supported,
-    "group.create": not_supported,
-    "group.add": not_supported,
-    "group.remove": not_supported,
-    "group.update_profile": not_supported,
-    "group.update_policy": not_supported,
+    "group.create": hosted_group_create,
+    "group.add": _group_add_dispatch,
+    "group.remove": _group_remove_dispatch,
+    "group.rebind_member": _group_rebind_dispatch,
+    "group.update_profile": _group_update_profile_dispatch,
+    "group.update_policy": _group_update_policy_dispatch,
 }

@@ -47,7 +47,18 @@ Defaults include `application/anp-attachment-manifest+json`, `application/json`,
 
 Public deployments must not depend on development defaults.
 
-## 5. Minimal public deployment
+## 5. Groups and operations
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AWIKI_GROUP_MAX_MESSAGE_BYTES` | `65536` | Maximum canonical Group message payload size. |
+| `AWIKI_GROUP_OUTBOX_MAX_PENDING` | `10000` | Durable Group delivery backpressure threshold. |
+| `AWIKI_OPERATIONS_TOKEN` | unset | Inline bearer secret for `/operations/status`; intended only for controlled tests. |
+| `AWIKI_OPERATIONS_TOKEN_FILE` | unset | Preferred path to a file containing the independent operations bearer secret. |
+
+`/operations/status` returns `404` when no operations token is configured and `401` for a missing or invalid bearer token. In a public deployment, create a random secret outside the checkout, set mode `0600`, grant the service user read access, and configure only `AWIKI_OPERATIONS_TOKEN_FILE`. Do not reuse an access token, refresh token, service key, or client credential.
+
+## 6. Minimal public deployment
 
 ```bash
 AWIKI_DATA_DIR=/var/lib/awiki-open-server
@@ -58,13 +69,16 @@ AWIKI_SERVICE_PRIVATE_KEY_PATH=/etc/awiki-open-server/keys/service-ed25519.pem
 AWIKI_ALLOW_UNSIGNED_PEER_DEV=false
 AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT=false
 AWIKI_MAX_ATTACHMENT_BYTES=10485760
+AWIKI_GROUP_MAX_MESSAGE_BYTES=65536
+AWIKI_GROUP_OUTBOX_MAX_PENDING=10000
+AWIKI_OPERATIONS_TOKEN_FILE=/etc/awiki-open-server/operations.token
 ```
 
-## 6. Service DID Document
+## 7. Service DID Document
 
 If fixed JSON is absent, the service generates the document from its private key. The public document must match `AWIKI_SERVICE_DID`; use a supported Ed25519 Multikey with correct authentication/assertion authorization and verifiable proof; contain exactly one `ANPMessageService`; and use an endpoint matching the public domain and RPC path. The service must not silently rewrite signed service entries.
 
-## 7. Local user DIDs
+## 8. Local user DIDs
 
 Generated shape:
 
@@ -74,6 +88,6 @@ did:wba:<domain>:users:<handle>:e1_default
 
 Uploaded local DID Documents must belong to `AWIKI_DID_DOMAIN`, use the current e1 direction, include a proof by default, authorize the proof method through `assertionMethod`, and contain a service entry matching this server.
 
-## 8. Tokens
+## 9. Tokens
 
 Access tokens last one hour; refresh tokens last 30 days and rotate on refresh; stale/expired refresh tokens are rejected; and revocation invalidates tokens, DID verification, WebSocket tickets, and profile access. Never put tokens in screenshots, issues, ordinary logs, or client examples.

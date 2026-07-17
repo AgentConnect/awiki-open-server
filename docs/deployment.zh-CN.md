@@ -22,6 +22,7 @@
 /var/lib/awiki-open-server/    SQLite and objects
 /var/log/awiki-open-server/    service logs if not using journal only
 /etc/awiki-open-server/keys/   service private key
+/etc/awiki-open-server/operations.token  独立 operations Bearer secret
 ```
 
 具体路径由运维环境决定，但私钥、数据与 Git checkout 应分离。
@@ -48,6 +49,9 @@ AWIKI_SERVICE_DID=did:wba:community.example.com
 AWIKI_SERVICE_PRIVATE_KEY_PATH=/etc/awiki-open-server/keys/service-ed25519.pem
 AWIKI_ALLOW_UNSIGNED_PEER_DEV=false
 AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT=false
+AWIKI_GROUP_MAX_MESSAGE_BYTES=65536
+AWIKI_GROUP_OUTBOX_MAX_PENDING=10000
+AWIKI_OPERATIONS_TOKEN_FILE=/etc/awiki-open-server/operations.token
 ```
 
 要求：
@@ -56,6 +60,7 @@ AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT=false
 - 文件权限最小化；
 - 不把 PEM 放进 Git、普通 env dump、日志或 Issue；
 - service DID 与 `/.well-known/did.json`、endpoint 和域名一致。
+- 在 checkout 外创建独立随机 operations token 文件，权限 `0600`；不得复用或内联 service key 或用户 token。
 
 ## 5. Uvicorn 与 systemd
 
@@ -129,21 +134,21 @@ PYTHONPATH=src \
 - endpoint；
 - health；
 - `anp.get_capabilities`；
-- federation disabled；
+- Community 跨域 Direct/Group 模式与 relay/E2EE 禁用边界；
 - contact verification compatibility disabled。
 
-随后再做双向真实互通。
+还应验证 `/operations/status` 无 Bearer 时返回未授权、带正确 Bearer 时成功，并且 `/healthz` 没有增加内部诊断。随后再做双向真实互通。
 
 ## 9. 双向互通
 
-需要两个独立域和身份：
+需要两个独立域和完全隔离的 CLI workspace：
 
 ```text
 Open Server local user -> awiki.info or another ANP user
 Remote ANP user -> Open Server local user
 ```
 
-只验证 capability 不等于 Direct 通过。必须记录 sender DID、recipient DID、目标 URL、错误 body 和服务日志（脱敏）。
+必须验证两个 Group Host 方向：Open Server 托管群接收远端 add/join 成员，以及远端托管群接收 Open Server add/join 成员；覆盖 create/get/list/members、profile/policy、双向 send/read、projection/sync/realtime、Group Receipt、leave/remove 和 outbox retry/restart。只验证 capability 不等于互通通过。必须记录 DID、operation/message ID、event/state version、receipt/delivery、目标 URL、错误 body 和服务日志（脱敏）。
 
 ## 10. 开发开关禁用
 

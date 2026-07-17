@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import os
 import json
@@ -40,6 +40,9 @@ class Settings:
     did_verify_dev_code: str = "666666"
     enable_contact_verification_compat: bool = False
     contact_verification_dev_otp: str = "123456"
+    group_max_message_bytes: int = 64 * 1024
+    group_outbox_max_pending: int = 10_000
+    operations_token: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "im_rpc_path", _normalize_route_path(self.im_rpc_path))
@@ -48,6 +51,8 @@ class Settings:
         object.__setattr__(self, "object_upload_path", _normalize_route_path(self.object_upload_path))
         object.__setattr__(self, "object_download_path", _normalize_route_path(self.object_download_path))
         object.__setattr__(self, "max_attachment_bytes", max(1, int(self.max_attachment_bytes)))
+        object.__setattr__(self, "group_max_message_bytes", max(1, int(self.group_max_message_bytes)))
+        object.__setattr__(self, "group_outbox_max_pending", max(1, int(self.group_outbox_max_pending)))
         object.__setattr__(
             self,
             "attachment_allowed_mime_types",
@@ -61,6 +66,10 @@ class Settings:
     @property
     def object_dir(self) -> Path:
         return self.data_dir / "objects"
+
+    @property
+    def group_key_dir(self) -> Path:
+        return self.data_dir / "group-keys"
 
     @property
     def anp_service_endpoint(self) -> str:
@@ -96,6 +105,12 @@ def load_settings() -> Settings:
         did_verify_dev_code=os.environ.get("AWIKI_DID_VERIFY_DEV_CODE") or os.environ.get("DEV_BYPASS_CODE") or "666666",
         enable_contact_verification_compat=os.environ.get("AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT", "").lower() in {"1", "true", "yes"},
         contact_verification_dev_otp=os.environ.get("AWIKI_CONTACT_VERIFICATION_DEV_OTP", "123456"),
+        group_max_message_bytes=int(os.environ.get("AWIKI_GROUP_MAX_MESSAGE_BYTES", str(64 * 1024))),
+        group_outbox_max_pending=int(os.environ.get("AWIKI_GROUP_OUTBOX_MAX_PENDING", "10000")),
+        operations_token=_load_optional_secret(
+            os.environ.get("AWIKI_OPERATIONS_TOKEN"),
+            os.environ.get("AWIKI_OPERATIONS_TOKEN_FILE"),
+        ),
     )
 
 
@@ -108,6 +123,13 @@ def _normalize_route_path(path: str) -> str:
     while len(normalized) > 1 and normalized.endswith("/"):
         normalized = normalized[:-1]
     return normalized
+
+
+def _load_optional_secret(value: str | None, path: str | None) -> str | None:
+    secret = str(value or "").strip()
+    if not secret and path:
+        secret = Path(path).expanduser().read_text(encoding="utf-8").strip()
+    return secret or None
 
 
 def _normalize_mime_type(value: str) -> str:

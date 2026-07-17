@@ -32,7 +32,7 @@ README 使用 Mermaid 作为事实源。Social Preview 可导出简化图：
 ## 4. Public Verify 结果（可选）
 
 - 文件：`open-server-public-verify.png`；
-- 展示：DID Document、health、capability 与 federation disabled 的通过结果；
+- 展示：DID Document、最小 health、capability、已启用的 Direct/Group DID-discovery 模式与 relay/E2EE 禁用检查；
 - 使用专门 demo 域或公开测试域；
 - 不展示真实 token、recipient 或私有服务器路径。
 

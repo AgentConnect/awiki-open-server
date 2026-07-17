@@ -16,6 +16,7 @@ The public domain must point directly to this repository's process. Business rou
 /var/lib/awiki-open-server/    SQLite and objects
 /var/log/awiki-open-server/    service logs if not using journal only
 /etc/awiki-open-server/keys/   service private key
+/etc/awiki-open-server/operations.token  independent operations bearer secret
 ```
 
 Adapt paths to the environment while keeping private keys/data separate from the Git checkout.
@@ -40,9 +41,12 @@ AWIKI_SERVICE_DID=did:wba:community.example.com
 AWIKI_SERVICE_PRIVATE_KEY_PATH=/etc/awiki-open-server/keys/service-ed25519.pem
 AWIKI_ALLOW_UNSIGNED_PEER_DEV=false
 AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT=false
+AWIKI_GROUP_MAX_MESSAGE_BYTES=65536
+AWIKI_GROUP_OUTBOX_MAX_PENDING=10000
+AWIKI_OPERATIONS_TOKEN_FILE=/etc/awiki-open-server/operations.token
 ```
 
-Use an Ed25519 PKCS#8 PEM with minimal file permissions. Never put it in Git, ordinary environment dumps, logs, or issues. The service DID, `/.well-known/did.json`, endpoint, and domain must agree.
+Use an Ed25519 PKCS#8 PEM with minimal file permissions. Create a separate random operations token file outside the checkout with mode `0600`; do not reuse or inline the service key or a user token. Never put secrets in Git, ordinary environment dumps, logs, or issues. The service DID, `/.well-known/did.json`, endpoint, and domain must agree.
 
 ## 5. Uvicorn and systemd
 
@@ -76,11 +80,11 @@ PYTHONPATH=src \
   --did-domain community.example.com
 ```
 
-This checks `/.well-known/did.json`, the service DID, exactly one `ANPMessageService`, its endpoint, health, `anp.get_capabilities`, disabled federation, and disabled contact-verification compatibility. Then run real bidirectional interoperability.
+This checks `/.well-known/did.json`, the service DID, exactly one `ANPMessageService`, its endpoint, health, `anp.get_capabilities`, Community cross-domain modes, disabled relay/E2EE boundaries, and disabled contact-verification compatibility. Also verify `/operations/status` is unauthorized without its bearer token, succeeds with it, and does not expand `/healthz`. Then run real bidirectional interoperability.
 
 ## 9. Bidirectional interoperability
 
-Verify both an Open Server local user sending to `awiki.info` or another ANP user and a remote ANP user sending to an Open Server local user. Capability discovery alone does not prove Direct messaging. Record sender/recipient DIDs, target URL, redacted error body, and redacted service logs.
+Verify Direct in both directions and Group interoperability in both host directions: an Open Server-hosted Group with remote add/join members, and a remote-hosted Group with Open Server add/join members. Cover create/get/list/members, profile/policy update, bidirectional send/read, projection/sync/realtime, Group Receipt validation, leave/remove, and outbox retry/restart recovery. Capability discovery alone proves none of these. Record DIDs, operation/message IDs, event/state versions, receipt/delivery results, target URL, redacted error body, and redacted service logs.
 
 ## 10. Disable development switches
 

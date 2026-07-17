@@ -60,7 +60,18 @@ text/plain
 
 公共部署不得依赖这些开发默认值。
 
-## 5. Public Deployment 最小示例
+## 5. 群组与运维
+
+| 变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `AWIKI_GROUP_MAX_MESSAGE_BYTES` | `65536` | 规范化群消息 payload 最大字节数 |
+| `AWIKI_GROUP_OUTBOX_MAX_PENDING` | `10000` | durable Group delivery 的背压阈值 |
+| `AWIKI_OPERATIONS_TOKEN` | unset | `/operations/status` 的内联 Bearer secret；只适合受控测试 |
+| `AWIKI_OPERATIONS_TOKEN_FILE` | unset | 独立 operations Bearer secret 的文件路径，公网部署优先 |
+
+未配置 operations token 时 `/operations/status` 返回 `404`；缺少或提供错误 Bearer 时返回 `401`。公网部署应在仓库外创建随机 secret 文件，权限设为 `0600`，只授予 service user 读取权限，并且只配置 `AWIKI_OPERATIONS_TOKEN_FILE`。不得复用 access token、refresh token、service key 或客户端凭据。
+
+## 6. Public Deployment 最小示例
 
 ```bash
 AWIKI_DATA_DIR=/var/lib/awiki-open-server
@@ -71,9 +82,12 @@ AWIKI_SERVICE_PRIVATE_KEY_PATH=/etc/awiki-open-server/keys/service-ed25519.pem
 AWIKI_ALLOW_UNSIGNED_PEER_DEV=false
 AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT=false
 AWIKI_MAX_ATTACHMENT_BYTES=10485760
+AWIKI_GROUP_MAX_MESSAGE_BYTES=65536
+AWIKI_GROUP_OUTBOX_MAX_PENDING=10000
+AWIKI_OPERATIONS_TOKEN_FILE=/etc/awiki-open-server/operations.token
 ```
 
-## 6. Service DID Document
+## 7. Service DID Document
 
 若未提供固定 JSON，服务会从 private key 生成文档。公开文档必须满足：
 
@@ -86,7 +100,7 @@ AWIKI_MAX_ATTACHMENT_BYTES=10485760
 
 已签名 service entry 不应被服务静默改写。
 
-## 7. 本地用户 DID
+## 8. 本地用户 DID
 
 自动生成形状：
 
@@ -102,7 +116,7 @@ did:wba:<domain>:users:<handle>:e1_default
 - proof verification method 必须属于 DID 并被 `assertionMethod` 授权；
 - service entry 必须与本服务匹配。
 
-## 8. Token
+## 9. Token
 
 当前本地 token 语义：
 

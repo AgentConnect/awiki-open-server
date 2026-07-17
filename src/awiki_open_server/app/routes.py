@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import asyncio
 from contextlib import suppress
+import secrets
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse, Response
@@ -21,6 +22,7 @@ from awiki_open_server.services import (
     site_public_root,
     upload_slot,
 )
+from awiki_open_server.messaging.groups.outbox import group_operations_status
 from awiki_open_server.shared.errors import AwikiError, InvalidParams, NotFound, Unauthorized
 from awiki_open_server.shared.ids import now_iso
 from awiki_open_server.shared.jsonrpc import dispatch
@@ -51,6 +53,7 @@ from awiki_open_server.user_compat import (
     ws_ticket_verify as user_compat_ws_ticket_verify,
     ws_tickets as user_compat_ws_tickets,
 )
+from awiki_open_server.user_compat.groups import GROUP_COMPAT_HANDLERS
 
 
 def _http_error(exc: Exception) -> HTTPException:
@@ -68,10 +71,21 @@ def _http_error(exc: Exception) -> HTTPException:
 PUBLIC_ANP_METHODS = [
     "anp.get_capabilities",
     "direct.send",
+    "group.create",
     "group.get_info",
     "group.join",
+    "group.add",
+    "group.remove",
+    "group.rebind_member",
+    "group.leave",
+    "group.update_profile",
+    "group.update_policy",
+    "group.send",
+    "group.incoming",
+    "group.state_changed",
     "attachment.get_download_ticket",
 ]
+GROUP_NOTIFICATION_METHODS = {"group.incoming", "group.state_changed"}
 
 
 def mount_routes(app: FastAPI) -> None:
@@ -83,6 +97,17 @@ def mount_routes(app: FastAPI) -> None:
     @app.get("/im/healthz")
     async def healthz():
         return {"status": "ok", "edition": "community"}
+
+    @app.get("/operations/status")
+    async def operations_status(request: Request):
+        configured = settings.operations_token
+        if not configured:
+            raise HTTPException(status_code=404, detail="not_found")
+        authorization = request.headers.get("authorization", "")
+        supplied = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+        if not supplied or not secrets.compare_digest(supplied, configured):
+            raise HTTPException(status_code=401, detail="unauthorized")
+        return group_operations_status(app)
 
     @app.post("/did-auth/rpc")
     async def did_auth_rpc(payload: dict, request: Request):
@@ -190,12 +215,29 @@ def mount_routes(app: FastAPI) -> None:
         return await dispatch(payload, request, MESSAGE_HANDLERS)
     app.add_api_route(settings.im_rpc_path, im_rpc, methods=["POST"])
 
+    @app.post("/group/rpc")
+    @app.post("/user-service/group/rpc")
+    async def group_compat_rpc(payload: dict, request: Request):
+        return await dispatch(payload, request, GROUP_COMPAT_HANDLERS)
+
     async def anp_im_rpc(request: Request):
         raw_body = await request.body()
         request.state.raw_body = raw_body
         payload = json.loads(raw_body.decode() or "{}")
+        method = payload.get("method")
+        if method in GROUP_NOTIFICATION_METHODS and "id" in payload:
+            return {
+                "jsonrpc": "2.0",
+                "error": {"code": -32600, "message": "group.notification_must_not_have_id"},
+                "id": payload.get("id"),
+            }
         public_handlers = {name: MESSAGE_HANDLERS[name] for name in PUBLIC_ANP_METHODS}
-        return await dispatch(payload, request, public_handlers)
+        result = await dispatch(payload, request, public_handlers)
+        if method in GROUP_NOTIFICATION_METHODS:
+            if "error" in result:
+                return result
+            return Response(status_code=204)
+        return result
     app.add_api_route(settings.anp_public_rpc_path, anp_im_rpc, methods=["POST"])
 
     @app.post("/auth/sms-codes")

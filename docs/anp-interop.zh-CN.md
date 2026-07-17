@@ -6,14 +6,15 @@
 
 当前互通目标是：
 
-- 发布可解析的 service/user DID Document；
-- 公开有限的 `/anp-im/rpc`；
+- 发布可解析的 service/user/Group DID Document；
+- 公开 Community ANP `/anp-im/rpc`；
 - 验证业务 `auth.origin_proof`；
 - 验证服务间 HTTP Signature 与 Content-Digest；
+- 验证 Group Receipt；
 - 让本地域和远端域进行双向 Direct；
-- 支持选定 Group/Attachment public method。
+- 支持小规模跨域 Group Host、成员域 projection 和选定 Attachment public method。
 
-这不是完整 federation。
+这是 DID discovery 后的服务直连，不是 federation relay 或 peer-route mesh。
 
 ## 2. Public Service DID
 
@@ -40,11 +41,13 @@ GET https://community.example.com/.well-known/did.json
 | --- | --- | --- |
 | `anp.get_capabilities` | 能力发现 | 按公开 capability contract |
 | `direct.send` | 跨域 Direct | origin proof + service HTTP Signature |
-| `group.get_info` | 发现 open group | 按当前 public contract |
-| `group.join` | 加入 open group | origin proof + service signature |
+| `group.create`、`group.get_info` | 创建 Group Host 或按权限读取群状态 | create 需要 origin proof；读取遵循 P4 可见性；跨域需要 service signature |
+| `group.join`、`group.add`、`group.remove`、`group.rebind_member`、`group.leave` | 立即生效的成员生命周期 | origin proof + service signature |
+| `group.update_profile`、`group.update_policy`、`group.send` | 群管理与消息 | origin proof、角色/成员校验和 service signature |
+| `group.incoming`、`group.state_changed` | 成员域投递 Notification | 无 JSON-RPC `id`；signed peer request + Group Receipt |
 | `attachment.get_download_ticket` | 获取本地对象下载 ticket | 本地对象与消息上下文验证 |
 
-Public `direct.send` / `group.join` 仅在本地开发显式开启 unsigned peer 模式时可放宽。公网不能开启。
+Public peer 调用仅在本地开发显式开启 unsigned peer 模式时可放宽。公网不能开启。Inbox、History、sync、read-state、本地群 list/history 和附件 upload/commit 仍是本地客户端方法。
 
 ## 4. 两层认证
 
@@ -57,6 +60,8 @@ Public `direct.send` / `group.join` 仅在本地开发显式开启 unsigned peer
 证明当前 HTTP hop 来自目标域信任的 service DID。服务使用 `AWIKI_SERVICE_PRIVATE_KEY_PATH` 对请求签名，并验证远端签名与 DID Document。
 
 两者不能相互替代。
+
+普通群请求的 P8 caller anchor 是 `meta.sender_did`。`group.incoming` 与 `group.state_changed` 的 caller anchor 是 `body.group_did`，且二者必须是没有 JSON-RPC `id` 的 Notification。
 
 ## 5. Outbound Direct
 
@@ -80,7 +85,20 @@ Remote user/service
 → local client reads Inbox/History or receives realtime hint
 ```
 
-## 7. 本地跨域 Gate
+## 7. 跨域 Group
+
+```text
+Local member -> local Open Server verifies origin proof
+-> resolves Group DID and calls remote Group Host
+-> remote host commits one ordered event and signs Group Receipt
+-> durable outbox sends group.incoming/group.state_changed to member homes
+-> member home verifies peer signature, Content-Digest, caller anchor,
+   Group Receipt, payload digest and event sequence before projection
+```
+
+`group.add` 和 `group.join` 成功后成员立即 active，不存在 invitation、token、join code、pending membership 或 accept 步骤。跨域投递按目标 FIFO durable retry，并支持重启恢复；这不等于 relay、HA 或大群 fanout。
+
+## 8. 本地跨域 Gate
 
 ```bash
 PYTHONPATH=src \
@@ -93,7 +111,7 @@ PYTHONPATH=src \
 
 该 Gate 证明协议方向，但不证明公网 DNS、TLS、Nginx 和真实远端服务。
 
-## 8. 公开验证
+## 9. 公开验证
 
 ```bash
 PYTHONPATH=src \
@@ -102,7 +120,7 @@ PYTHONPATH=src \
   --did-domain community.example.com
 ```
 
-然后使用真实远端 peer 做双向 Direct。
+然后使用两个完全隔离的 Rust CLI workspace，通过两个公网域验证双向 Direct 和两个 Group Host 方向。必须覆盖 create/get/list/add/join/members/update、双向 send/read、projection/sync/realtime、receipt、leave/remove 和 retry/restart。
 
 ### 不足以通过的情况
 
@@ -113,7 +131,7 @@ PYTHONPATH=src \
 - 远端返回 `missing params.meta` 等请求形状错误；
 - 公网域实际代理到其他 AWiki 服务。
 
-## 9. Attachment 边界
+## 10. Attachment 边界
 
 当前 Community Server 只为本地 committed object 和本地 Direct/Group message context 签发 ticket。
 
@@ -124,7 +142,7 @@ PYTHONPATH=src \
 - object E2EE authorization；
 - remote object relay。
 
-## 10. 故障记录
+## 11. 故障记录
 
 互通失败至少记录：
 
@@ -132,13 +150,15 @@ PYTHONPATH=src \
 方向：local -> remote / remote -> local
 source service DID：
 target service DID：
-sender DID：
-recipient DID：
+Agent / Group DID：
+operation / message ID：
+group_event_seq / group_state_version：
 target URL：
 HTTP status：
+receipt / delivery / retry 验证结果：
 JSON-RPC error code/body（脱敏）：
 DID Document digest/version：
 service log correlation：
 ```
 
-不要记录 private key、完整 token 或 origin proof 中的敏感材料。
+不要记录 private key、完整 token/proof/signature 或非测试消息正文。

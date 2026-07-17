@@ -887,6 +887,7 @@ def _handle_document_from_profile(profile: dict[str, Any], settings: Settings) -
         "handle": full,
         "did": profile["did"],
         "status": "active",
+        "binding_generation": str(profile.get("handle_binding_generation") or "1"),
         "updated": updated,
         "profile": {
             "type": "DIDSubjectProfile",

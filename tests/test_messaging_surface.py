@@ -54,7 +54,13 @@ async def test_direct_group_participant_and_public_surface(client):
 
     caps = await rpc(client, "/im/rpc", "anp.get_capabilities", token=alice_token)
     assert "anp.group.base.v1" in caps["result"]["supported_profiles"]
-    assert caps["result"]["features"]["group_participant"]["management"] is False
+    assert caps["result"]["features"]["group_participant"]["management"] is True
+    assert caps["result"]["features"]["group_participant"]["join_modes"] == ["open-join", "admin-add"]
+    assert caps["result"]["features"]["group_participant"]["max_members"] == "100"
+    assert caps["result"]["features"]["cross_domain_group"] == {
+        "enabled": True,
+        "mode": "did_discovery_direct_call",
+    }
 
     sent = await rpc(client, "/im/rpc", "direct.send", {"recipient_did": bob_did, "text": "hi"}, token=alice_token)
     assert sent["result"]["recipient_did"] == bob_did
@@ -95,7 +101,7 @@ async def test_direct_group_participant_and_public_surface(client):
     assert messages["result"]["messages"][0]["content"] == "group hi"
 
     denied = await rpc(client, "/im/rpc", "group.create", {"display_name": "nope"}, token=alice_token)
-    assert denied["error"]["message"] == "not_supported"
+    assert denied["error"]["message"] == "missing_origin_proof"
 
     public_denied = await rpc(client, "/anp-im/rpc", "direct.get_history", {"peer_did": bob_did}, token=alice_token)
     assert public_denied["error"]["message"] == "method_not_found"
@@ -103,12 +109,14 @@ async def test_direct_group_participant_and_public_surface(client):
     for method, params in [
         ("sync.delta", {"after_event_seq": 0}),
         ("attachment.create_slot", {"attachment_id": "att-public-denied"}),
-        ("group.send", {"group_did": group_did, "text": "no public send"}),
-        ("group.leave", {"group_did": group_did}),
     ]:
         denied = await rpc(client, "/anp-im/rpc", method, params, token=alice_token)
         assert denied["error"]["message"] == "method_not_found"
 
     for method in ["group.add", "group.remove", "group.update_profile", "group.update_policy"]:
         response = await rpc(client, "/im/rpc", method, {"group_did": group_did}, token=alice_token)
-        assert response["error"]["message"] == "not_supported"
+        assert response["error"]["message"] == "missing_origin_proof"
+
+    for method in ["group.send", "group.leave"]:
+        response = await rpc(client, "/anp-im/rpc", method, {"group_did": group_did}, token=alice_token)
+        assert response["error"]["message"] == "missing_origin_proof"

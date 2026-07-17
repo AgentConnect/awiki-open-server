@@ -47,9 +47,9 @@ flowchart LR
 | --- | --- | --- |
 | AWiki Me to AWiki hosted services | Primary path | The default tenant and real E2E test domain must be documented separately. |
 | awiki-cli to AWiki hosted services | Primary path | Installation channel, service capabilities, and CLI version must match. |
-| awiki-cli to awiki-open-server | Local compatibility and smoke path available | Open Server does not support E2EE, full group administration, or production identity providers. |
+| awiki-cli to awiki-open-server | Community Group v1 and local compatibility paths are available | Open Server does not support E2EE, large-group/complex governance, HA, or production identity providers. |
 | AWiki Me to awiki-open-server | Basic identity and IM path requires continuous validation | Agent/Daemon features are restricted on domains outside the built-in allowlist; Open Server has no E2EE. |
-| awiki-open-server to other ANP domains | Selected methods interoperate | This is not complete federation; only a limited set of JSON-RPC methods and local object capabilities are public. |
+| awiki-open-server to other ANP domains | Direct and Community Group v1 interoperate through DID discovery | This is not a federation relay or peer-route mesh; only the documented public ANP and object capabilities are exposed. |
 | AWiki Me Web to any service | Must not currently be advertised as available | The core SDK entry point used by Flutter Web is currently a runtime stub. |
 
 ## Consistent public terminology

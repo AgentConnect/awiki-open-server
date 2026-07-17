@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from awiki_open_server.app.main import create_app
 from awiki_open_server.app.settings import Settings
+from awiki_open_server.messaging.groups import outbox
 from awiki_open_server.service_identity import generate_ed25519_private_key_pem
 
 
@@ -25,6 +29,7 @@ async def test_healthz(tmp_path):
         health = await client.get("/health")
         user_service_health = await client.get("/user-service/health")
         im_health = await client.get("/im/healthz")
+        operations = await client.get("/operations/status")
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
@@ -34,7 +39,102 @@ async def test_healthz(tmp_path):
     assert user_service_health.json()["status"] == "ok"
     assert im_health.status_code == 200
     assert im_health.json()["status"] == "ok"
+    assert operations.status_code == 404
     assert (tmp_path / "awiki-open-server.sqlite3").exists()
+
+
+@pytest.mark.asyncio
+async def test_operations_status_is_separately_protected_and_aggregate_only(tmp_path):
+    app = create_app(
+        Settings(
+            data_dir=tmp_path,
+            public_base_url="http://testserver",
+            service_did="did:wba:testserver",
+            did_domain="testserver",
+            operations_token="operations-test-secret",
+        )
+    )
+    app.state.group_outbox_last_heartbeat = "2026-07-16T00:00:00+00:00"
+    with app.state.store.connect() as conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        for event_seq, (delivery_id, status) in enumerate(
+            (("gdlv-pending", "pending"), ("gdlv-dead", "dead")),
+            start=1,
+        ):
+            conn.execute(
+                """
+                INSERT INTO group_delivery_outbox(
+                  delivery_id, group_did, group_event_seq, target_did, target_service_did,
+                  method, envelope_json, status, next_attempt_at, created_at, updated_at
+                    ) VALUES (?, 'did:wba:group.example:groups:test:e1_test', ?,
+                          'did:wba:member.example:users:test:e1_test', 'did:wba:member.example',
+                          'group.state_changed', '{}', ?, ?, ?, ?)
+                """,
+                (
+                        delivery_id,
+                        event_seq,
+                        status,
+                    "2000-01-01T00:00:00+00:00",
+                    "2000-01-01T00:00:00+00:00",
+                    "2000-01-01T00:00:00+00:00",
+                ),
+            )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public_health = await client.get("/healthz")
+        missing = await client.get("/operations/status")
+        wrong = await client.get(
+            "/operations/status",
+            headers={"Authorization": "Bearer wrong-secret"},
+        )
+        response = await client.get(
+            "/operations/status",
+            headers={"Authorization": "Bearer operations-test-secret"},
+        )
+
+    assert public_health.json() == {"status": "ok", "edition": "community"}
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
+    assert response.status_code == 200
+    status = response.json()
+    assert "schema_version" not in status
+    assert status["outbox"]["pending"] == 1
+    assert status["outbox"]["dead"] == 1
+    assert status["outbox"]["oldest_pending_age_seconds"] > 0
+    assert status["outbox"]["worker_last_heartbeat"] == "2026-07-16T00:00:00+00:00"
+    assert status["storage"]["group_key_directory"] == {
+        "exists": True,
+        "readable": True,
+        "writable": True,
+    }
+    serialized = str(status).lower()
+    assert "group_did" not in serialized
+    assert "target_did" not in serialized
+    assert "operations-test-secret" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_outbox_worker_cycle_error_log_does_not_include_exception_message(
+    monkeypatch,
+    caplog,
+):
+    async def fail_to_thread(*_args, **_kwargs):
+        raise RuntimeError("sensitive-envelope-proof-message")
+
+    async def stop_after_cycle(_seconds):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(outbox.asyncio, "to_thread", fail_to_thread)
+    monkeypatch.setattr(outbox.asyncio, "sleep", stop_after_cycle)
+    app = type("App", (), {"state": type("State", (), {})()})()
+
+    with caplog.at_level(logging.ERROR, logger=outbox.__name__):
+        with pytest.raises(asyncio.CancelledError):
+            await outbox.run_group_outbox(app)
+
+    assert "result_code=RuntimeError" in caplog.text
+    assert "sensitive-envelope-proof-message" not in caplog.text
 
 
 def test_im_websocket_accepts_ws_ticket(tmp_path):

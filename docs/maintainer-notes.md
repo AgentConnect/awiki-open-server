@@ -22,7 +22,7 @@ Replace the low-information `awiki lite server` description with wording aligned
 
 ## 2. Status
 
-`pyproject.toml` is currently `0.1.0` and describes a single-process Community Server MVP. Keep `v0.1 MVP` and the no-E2EE, single-node, no-production-SMS/email, incomplete Group Admin, no-HA/offline-push, and incomplete-federation boundaries near the top. Do not call it Stable unless those facts materially change.
+`pyproject.toml` is currently `0.1.0` and describes a single-process Community Server MVP. Keep `v0.1 MVP` and the no-E2EE, single-node, no-production-SMS/email, small-group/no-complex-governance, no-HA/offline-push, and no-relay/peer-route boundaries near the top. Community Group v1 creation, management, direct cross-domain delivery, and member-home projection are supported and must not be described as commercial-only. Do not call it Stable unless those facts materially change.
 
 ## 3. Chinese filename
 
@@ -38,7 +38,7 @@ There is no verified Dockerfile/Compose primary path. A future container path ne
 
 ## 6. Client compatibility
 
-Before release, run pytest, `smoke-asgi`, `smoke-local`, `smoke-cross-domain-local`, Rust CLI local smoke, public `verify-public` when applicable, and AWiki Me custom-tenant smoke if app compatibility is claimed. Confirm AWiki Me's Agent realm allowlist; never state complete app support.
+Before release, run pytest, `smoke-asgi`, `smoke-local`, `smoke-cross-domain-local`, the Rust CLI full Group lifecycle in both public host directions, public `verify-public`, and AWiki Me custom-tenant smoke if app compatibility is claimed. Confirm receipt/outbox/restart evidence and AWiki Me's Agent realm allowlist; never state complete app support.
 
 ## 7. Security and license
 

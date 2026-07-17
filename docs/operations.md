@@ -4,7 +4,7 @@
 
 ## 1. Data assets
 
-`AWIKI_DATA_DIR` is the primary persistence boundary. It contains at least SQLite, committed attachment objects, implementation-specific temporary/uncommitted object or slot state, and local business state. The service private key normally lives in a separate secure directory and must not be distributed unprotected with Git or public data backups.
+`AWIKI_DATA_DIR` is the primary persistence boundary. It contains at least SQLite/WAL, committed attachment objects, temporary/uncommitted object or slot state, Group Host keys under `group-keys`, durable Group outbox state, and local projections. The service private key normally lives in a separate secure directory and must not be distributed unprotected with Git or public data backups.
 
 ## 2. Consistent backups
 
@@ -37,7 +37,17 @@ Replacing Python code alone is not a complete upgrade when data, objects, and se
 curl --noproxy '*' https://community.example.com/healthz
 ```
 
-Also monitor process restarts/failures, SQLite locks and disk space, file permissions, object capacity, HTTP and JSON-RPC errors, WebSocket count, attachment upload/commit failures, DID resolution/signature failures, refresh/revoke anomalies, and `verify-public` results. Logs must not contain access/refresh tokens, private keys, full message bodies, or sensitive attachment URLs.
+For protected aggregate diagnostics, configure `AWIKI_OPERATIONS_TOKEN_FILE` and query locally or through a restricted operator route:
+
+```bash
+curl --fail-with-body \
+  -H "Authorization: Bearer ${AWIKI_OPERATIONS_TOKEN}" \
+  http://127.0.0.1:8766/operations/status
+```
+
+The response reports hosted groups/active members, outbox pending/retry/delivered/dead counts, oldest pending age, worker heartbeat and last drain, DB/WAL size, and Group-key directory readiness. The endpoint is `404` when disabled and `401` without valid authorization. Never place the secret in command history in real operations; the environment expansion above is illustrative, and the service itself should load it from a mode-`0600` file. `/healthz` remains public and deliberately contains none of these diagnostics.
+
+Also monitor process restarts/failures, SQLite locks and disk space, file permissions, object and Group-key capacity, outbox backlog/dead deliveries/worker age, HTTP and JSON-RPC errors, WebSocket count, attachment upload/commit failures, DID resolution/signature/receipt failures, refresh/revoke anomalies, and `verify-public` results. Logs must not contain access/refresh/operations tokens, private keys, complete proofs/signatures, non-test message bodies, or sensitive attachment URLs.
 
 ## 6. Attachment cleanup
 
@@ -61,10 +71,11 @@ Before multi-process or multi-node operation, design a shared event bus, session
 6. local smoke
 7. CLI smoke
 8. public verification
-9. bidirectional interop with direction, DIDs, target URL, and redacted errors recorded
+9. protected operations status and outbox health
+10. bidirectional Direct and Group interop with direction, DIDs, target URL, and redacted errors recorded
 
 Do not start by changing sibling AWiki services; this repository must explain its own request path independently.
 
 ## 9. Single-node risks
 
-A process failure interrupts realtime and APIs; local-disk failure affects both DB and objects; there is no built-in replica/failover, complete event-log compaction/retention, production offline push, or remote object relay. Every production pilot must explicitly accept these risks in its SLO, backup, and capacity plans.
+A process failure interrupts realtime and APIs; local-disk failure affects DB, objects, and Group keys; there is no built-in replica/failover, complete event-log compaction/retention, production offline push, federation relay, or remote object relay. Group delivery retries survive restart through SQLite, but this is not HA. Every production pilot must explicitly accept these risks in its SLO, backup, and capacity plans.

@@ -7,7 +7,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from tests.helpers import did_keypair_document
+from tests.helpers import did_keypair_document, sign_did_document
 
 
 RUN_PUBLIC_SYSTEM_TESTS = os.environ.get("AWIKI_RUN_PUBLIC_SYSTEM_TESTS", "").lower() in {"1", "true", "yes"}
@@ -93,8 +93,13 @@ async def test_rwiki_cn_public_service_surface(public_client):
     result = caps["result"]
     assert result["service_did"] == PUBLIC_SERVICE_DID
     assert result["features"]["cross_domain_direct"]["enabled"] is True
-    assert result["features"]["group_participant"]["management"] is False
-    assert "federation" in result["disabled_features"]
+    assert result["features"]["cross_domain_group"] == {
+        "enabled": True,
+        "mode": "did_discovery_direct_call",
+    }
+    assert result["features"]["group_participant"]["management"] is True
+    assert result["features"]["group_participant"]["join_modes"] == ["open-join", "admin-add"]
+    assert "federation_relay" in result["disabled_features"]
     assert result["direct_e2ee"]["enabled"] is False
 
 
@@ -107,11 +112,18 @@ async def test_rwiki_cn_mvp_identity_direct_and_disabled_contact_verification(pu
     bob_did = f"did:wba:{PUBLIC_DID_DOMAIN}:{bob_handle}:e1_{suffix}"
     alice_key, alice_doc = did_keypair_document(alice_did)
     bob_key, bob_doc = did_keypair_document(bob_did)
-    del alice_key, bob_key
-
     for did_document in (alice_doc, bob_doc):
         did_document["service"][0]["serviceEndpoint"] = f"{PUBLIC_BASE_URL}/anp-im/rpc"
         did_document["service"][0]["serviceDid"] = PUBLIC_SERVICE_DID
+        did_document["service"][0]["authSchemes"] = ["bearer", "didwba"]
+        did_document["service"][0]["profiles"] = [
+            "anp.direct.base.v1",
+            "anp.group.base.v1",
+            "anp.attachment.v1",
+        ]
+    alice_doc = sign_did_document(alice_doc, alice_key)
+    bob_doc = sign_did_document(bob_doc, bob_key)
+    del alice_key, bob_key
 
     alice_reg = await rpc(
         public_client,
@@ -179,4 +191,4 @@ async def test_rwiki_cn_mvp_identity_direct_and_disabled_contact_verification(pu
     assert joined["result"]["joined"] is True
 
     group_create = await rpc(public_client, "/im/rpc", "group.create", {"display_name": "nope"}, token=alice_reg["result"]["token"])
-    assert group_create["error"]["message"] == "not_supported"
+    assert group_create["error"]["message"] == "missing_origin_proof"
