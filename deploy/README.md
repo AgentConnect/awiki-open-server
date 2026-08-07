@@ -43,7 +43,7 @@ That command verifies:
 
 1. Install the repository under a release path such as `/opt/awiki-open-server`.
 2. Create a Python virtual environment, then install the app so pinned
-   dependencies, including `anp==0.8.8`, are installed:
+   dependencies, including `anp==0.9.2`, are installed:
 
    ```bash
    cd /opt/awiki-open-server
@@ -88,6 +88,6 @@ process loads the sibling ANP SDK checkout first:
 <workspace>/anp/anp:<workspace>/awiki-open-server/src:<python-user-site-packages>
 ```
 
-This was verified to load ANP SDK `0.8.8`. A cleaner production deployment can
+This was verified to load ANP SDK `0.9.2`. A cleaner production deployment can
 switch back to `.venv/bin/python` once `pip install -e .` can install
-`anp==0.8.8` normally.
+`anp==0.9.2` normally.

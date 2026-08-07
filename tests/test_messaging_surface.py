@@ -72,7 +72,7 @@ async def test_direct_group_participant_and_public_surface(client):
     assert history["result"]["messages"][0]["receiver_did"] == bob_did
 
     delta = await rpc(client, "/im/rpc", "sync.delta", {"after_event_seq": 0}, token=bob_token)
-    assert delta["result"]["events"][0]["event_type"] == "direct.message.created"
+    assert delta["result"]["events"][0]["event_type"] == "message.created"
 
     thread = await rpc(client, "/im/rpc", "sync.thread_after", {"thread_id": f"direct:{alice_did}", "after_server_seq": 0}, token=bob_token)
     assert thread["result"]["messages"][0]["message_id"] == sent["result"]["message_id"]
@@ -118,5 +118,25 @@ async def test_direct_group_participant_and_public_surface(client):
         assert response["error"]["message"] == "missing_origin_proof"
 
     for method in ["group.send", "group.leave"]:
-        response = await rpc(client, "/anp-im/rpc", method, {"group_did": group_did}, token=alice_token)
-        assert response["error"]["message"] == "missing_origin_proof"
+        meta = {
+            "anp_version": "1.0",
+            "profile": "anp.group.base.v1",
+            "security_profile": "transport-protected",
+            "sender_did": alice_did,
+            "target": {"kind": "group", "did": group_did},
+            "operation_id": f"op-public-{method}",
+        }
+        if method == "group.send":
+            meta.update({"message_id": "msg-public-send", "content_type": "text/plain"})
+        response = await client.post(
+            "/anp-im/rpc",
+            json={
+                "jsonrpc": "2.0",
+                "method": method,
+                "params": {"meta": meta, "body": {"text": "unsigned"} if method == "group.send" else {}},
+                "id": f"request-public-{method}",
+            },
+            headers={"Authorization": f"Bearer {alice_token}"},
+        )
+        assert response.status_code == 401
+        assert response.json()["error"]["message"] == "missing_origin_proof"

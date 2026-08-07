@@ -193,7 +193,11 @@ async def test_group_read_state_uses_thread_watermark_without_sync_event(client)
     second = await rpc(client, "/im/rpc", "group.send", {"group_did": group_did, "text": "group sync 2"}, token=alice_token)
 
     delta = await rpc(client, "/im/rpc", "sync.delta", {"after_event_seq": 0}, token=alice_token)
-    message_events = [event for event in delta["result"]["events"] if event["event_type"] == "group.message.created"]
+    message_events = [
+        event
+        for event in delta["result"]["events"]
+        if event["event_type"] == "message.created" and event["aggregate_kind"] == "group_message"
+    ]
     assert message_events[0]["aggregate_kind"] == "group_message"
     assert message_events[0]["aggregate_id"] == first["result"]["message_id"]
     assert message_events[0]["payload"]["thread"] == {"kind": "group", "group_did": group_did}

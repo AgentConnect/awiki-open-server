@@ -61,11 +61,23 @@ Community v1 不是商业集群的缩小部署包。基础群能力和标准跨�
 | `GET /im/ws` | 本地认证 WebSocket 与 realtime hint |
 | `POST /group/rpc` | 旧 Message Service 群兼容 façade |
 | `POST /user-service/group/rpc` | 旧 User Service 群兼容 façade |
+| `POST /user-service/v1/...` | Open Server 已实现的 User Service canonical v1 子集；URL 中的 `v1` 是产品 API 版本 |
 | `GET /.well-known/did.json` | Service DID Document |
 | `GET /healthz` | 无敏感诊断信息的公开存活检查 |
 | `GET /operations/status` | 可选、独立 Bearer 保护的聚合运维状态 |
 
 兼容 façade 只能转换字段与错误，不能建立第二套群权威状态，也不能绕过 origin proof 或直接写群表。
+
+版本来源必须分层：User Service 由 `/user-service/v1/...` URL 选版；Message/ANP 入口保持
+`/im/rpc` 与 `/anp-im/rpc`，由 `meta.profile`（例如 `anp.direct.base.v1`）选版。
+`X-AWiki-Client-Version` 只用于兼容观测，`X-API-Contract: user-service.v1` 只用于响应诊断；
+两者都不能改变协议语义。
+
+本地同步同时保留 `anp.sync.local.v1`，并支持受限的 `anp.sync.local.v2` wire contract。v2 仅供
+一个 DID 的唯一设备拉取和建立本地投影：`sync.bootstrap` 只返回 `tail_only`，并支持
+`sync.delta`、`message.get_batch`、`sync.thread_after`。不得支持一个 DID 多设备、第二个 client
+instance、设备间共享、snapshot/compact recovery 或多设备 cursor 合并；这些请求必须明确返回
+`not_supported`。这里的 profile v2 不是多设备能力声明。
 
 ## 5. Community Group v1
 
@@ -258,6 +270,7 @@ DID discovery 必须限制 scheme、host、port、重定向和地址类别，防
 - operation/message 幂等、state version 和 event sequence；
 - Notification 无 JSON-RPC id；
 - projection、history、sync、read-state 和 realtime；
+- 单设备 sync v2 bootstrap/delta/hydration 正向流程，以及第二设备、第二 client instance 的 `not_supported` 负例；
 - outbox retry、duplicate、FIFO、离线、背压、dead 和重启恢复；
 - SSRF、伪造 proof/peer/receipt 和越权访问；
 - legacy join-code 方法 `not_supported`。

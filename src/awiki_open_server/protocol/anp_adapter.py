@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 
-REQUIRED_ANP_SDK_VERSION = "0.8.9"
+REQUIRED_ANP_SDK_VERSION = "0.9.2"
 
 
 def _loaded_anp_version() -> str | None:
@@ -93,6 +93,20 @@ class ServiceHttpSignatureVerification:
 class OriginProofVerification:
     keyid: str
     verification_method: dict[str, Any]
+
+
+def signature_keyid(headers: Mapping[str, str]) -> str:
+    """Return the RFC 9421 keyid without treating any hint header as identity."""
+
+    try:
+        metadata = _sdk_extract_signature_metadata({str(key): str(value) for key, value in headers.items()})
+    except Exception as exc:
+        raise AnpProtocolError(_map_http_signature_error(str(exc)), str(exc)) from exc
+    params = metadata.get("params")
+    keyid = params.get("keyid") if isinstance(params, dict) else None
+    if not isinstance(keyid, str) or "#" not in keyid:
+        raise AnpProtocolError("signature_keyid_required")
+    return keyid
 
 
 def create_group_did_identity(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
 import json
 from typing import Any
 
@@ -30,6 +31,7 @@ from awiki_open_server.messaging.groups import (
 )
 from awiki_open_server.messaging.groups.inbound import INBOUND_GROUP_HANDLERS
 from awiki_open_server.messaging.groups.routing import forward_group_command, refresh_remote_group_members
+from awiki_open_server.protocol.registry import LOCAL_PROFILES, METHOD_CONTRACTS, STANDARD_PROFILES
 from awiki_open_server.service_identity import validate_origin_proof_structure
 from awiki_open_server.shared import runtime
 from awiki_open_server.shared.errors import AwikiError, Conflict, InvalidParams, NotFound, NotSupported, Unauthorized
@@ -101,18 +103,29 @@ def _http_post_json(url: str, payload: dict[str, Any], headers: dict[str, str] |
 
 def capabilities(_: dict[str, Any], request: Request) -> dict[str, Any]:
     settings = get_settings(request)
+    public_rpc = request.url.path.rstrip("/") == settings.anp_public_rpc_path.rstrip("/")
+    profiles = list(STANDARD_PROFILES if public_rpc else (*STANDARD_PROFILES, *LOCAL_PROFILES))
+    methods = {
+        method: {
+            "profile": contract.profile,
+            "profiles": [contract.profile, *contract.alternate_profiles],
+            "kind": contract.rpc_kind,
+            "surfaces": sorted(contract.surfaces),
+            "principal": contract.principal,
+            "origin_proof": "required" if contract.origin_proof_required else "not_required",
+            "receipt_proof": "required" if contract.receipt_proof_required else "not_required",
+            "wns_binding": "required" if contract.wns_binding_required else "not_required",
+        }
+        for method, contract in METHOD_CONTRACTS.items()
+        if contract.advertised
+        and ((public_rpc and "public" in contract.surfaces) or (not public_rpc and "local" in contract.surfaces))
+    }
     return {
         "service_did": settings.service_did,
         "edition": "community",
-        "supported_profiles": [
-            "anp.core.binding.v1",
-            "anp.direct.base.v1",
-            "anp.group.base.v1",
-            "anp.attachment.v1",
-            "anp.sync.local.v1",
-            "anp.read_state.local.v1",
-            "anp.direct.local.v1",
-        ],
+        "profiles": profiles,
+        "supported_profiles": profiles,
+        "security_profiles": ["transport-protected"],
         "supported_security_profiles": ["transport-protected"],
         "supported_content_types": [
             "text/plain",
@@ -126,7 +139,7 @@ def capabilities(_: dict[str, Any], request: Request) -> dict[str, Any]:
             "max_content_pages_per_handle": "5",
         },
         "proof_policies": {
-            "direct_base_origin_proof": "required_for_cross_domain",
+            "direct_base_origin_proof": "required_for_canonical_local_and_cross_domain",
             "group_base_origin_proof": "required_for_all_mutations_and_send",
             "direct_e2ee_origin_proof": "not_supported",
             "service_http_signature": "required_for_cross_domain",
@@ -136,6 +149,13 @@ def capabilities(_: dict[str, Any], request: Request) -> dict[str, Any]:
         "features": {
             "cross_domain_direct": {"enabled": True, "mode": "did_discovery_direct_call"},
             "cross_domain_group": {"enabled": True, "mode": "did_discovery_direct_call"},
+            "federation": {"mode": "did_discovery_direct_call", "relay_mesh": False},
+            "attachment": {
+                "upload": True,
+                "download": True,
+                "https_only": settings.public_base_url.lower().startswith("https://"),
+            },
+            "methods": methods,
             "group_participant": {
                 "enabled": True,
                 "management": True,
@@ -165,6 +185,10 @@ def capabilities(_: dict[str, Any], request: Request) -> dict[str, Any]:
             "large_group_fanout": "commercial",
             "group_ha": "commercial",
             "federation_relay": "commercial",
+            "relay_mesh": "not_supported",
+            "multi_device": "not_supported",
+            "sync_v2_mode": "single_device_pull_only",
+            "encrypted_attachment": "not_supported",
             "managed_runtime_agents": "commercial",
             "tenant_site_hosting": "commercial",
         },
@@ -185,15 +209,37 @@ def _store_direct_message(
     recipient_local: bool,
     delivery_state: str = "accepted",
     final_acceptance: bool = True,
+    meta: dict[str, Any] | None = None,
+    auth: dict[str, Any] | None = None,
+    origin_proof_verified: bool = False,
 ) -> dict[str, Any]:
     recipient_event_seq: int | None = None
     store = get_store(request)
     body_json = _json(body)
     with store.connect() as conn:
+        operation_existing = None
+        if idempotency_operation_id is not None:
+            operation_existing = conn.execute(
+                "SELECT * FROM direct_messages WHERE sender_did = ? AND operation_id = ?",
+                (sender, idempotency_operation_id),
+            ).fetchone()
+        if operation_existing:
+            return _direct_idempotent_result_or_raise(
+                operation_existing,
+                message_id=message_id,
+                sender=sender,
+                recipient=recipient,
+                body_json=body_json,
+                content_type=content_type,
+                operation_id=idempotency_operation_id,
+                delivery_state=delivery_state,
+                final_acceptance=final_acceptance,
+            )
         existing = conn.execute("SELECT * FROM direct_messages WHERE message_id = ?", (message_id,)).fetchone()
         if existing:
             return _direct_idempotent_result_or_raise(
                 existing,
+                message_id=message_id,
                 sender=sender,
                 recipient=recipient,
                 body_json=body_json,
@@ -205,8 +251,28 @@ def _store_direct_message(
         seq = store.next_seq(conn, "direct_messages")
         created_at = now_iso()
         conn.execute(
-            "INSERT INTO direct_messages(message_id, sender_did, recipient_did, operation_id, body_json, content_type, created_at, server_seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (message_id, sender, recipient, operation_id, body_json, content_type, created_at, seq),
+            """
+            INSERT INTO direct_messages(
+              message_id, sender_did, recipient_did, operation_id, body_json,
+              content_type, created_at, server_seq, meta_json, origin_auth_json,
+              origin_proof_verified, authoritative_sender_did, security_profile
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message_id,
+                sender,
+                recipient,
+                operation_id,
+                body_json,
+                content_type,
+                created_at,
+                seq,
+                _json(meta) if meta else None,
+                _json(auth) if auth else None,
+                1 if origin_proof_verified else 0,
+                sender,
+                str((meta or {}).get("security_profile") or "transport-protected"),
+            ),
         )
         if sender_local:
             conn.execute("INSERT OR IGNORE INTO direct_message_views(owner_did, message_id, peer_did) VALUES (?, ?, ?)", (sender, message_id, recipient))
@@ -292,6 +358,7 @@ def _stored_operation_id(row: Any) -> str | None:
 def _direct_idempotent_result_or_raise(
     row: Any,
     *,
+    message_id: str,
     sender: str,
     recipient: str,
     body_json: str,
@@ -301,6 +368,8 @@ def _direct_idempotent_result_or_raise(
     final_acceptance: bool = True,
 ) -> dict[str, Any]:
     fields: list[str] = []
+    if row["message_id"] != message_id:
+        fields.append("message_id")
     if row["sender_did"] != sender:
         fields.append("sender_did")
     if row["recipient_did"] != recipient:
@@ -348,6 +417,7 @@ def _direct_existing_idempotent_result(
         return None
     return _direct_idempotent_result_or_raise(
         existing,
+        message_id=message_id,
         sender=sender,
         recipient=recipient,
         body_json=_json(body),
@@ -426,7 +496,6 @@ def _remote_direct_payload(
     content_type: str,
     meta: dict[str, Any] | None = None,
     auth: dict[str, Any],
-    client: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     forwarded_meta = dict(meta or {})
     # Do not mutate ANP meta after origin_proof validation. The receiver verifies
@@ -438,7 +507,6 @@ def _remote_direct_payload(
             "meta": forwarded_meta,
             "auth": auth,
             "body": body,
-            "client": client or {"response_mode": "wait-final"},
         },
         "id": operation_id,
     }
@@ -455,7 +523,6 @@ def _send_remote_direct(
     content_type: str,
     meta: dict[str, Any] | None,
     auth: dict[str, Any],
-    client: dict[str, Any] | None,
     service_identity: Any,
 ) -> dict[str, Any]:
     service = _discover_anp_service(recipient, settings)
@@ -469,7 +536,6 @@ def _send_remote_direct(
         content_type=content_type,
         meta=meta,
         auth=auth,
-        client=client,
     )
     headers = {"x-anp-source-service-did": settings.service_did}
     body_bytes = json.dumps(payload).encode()
@@ -500,8 +566,6 @@ class AwikiRemoteDeliveryError(InvalidParams):
 def _validate_remote_direct_result(result: dict[str, Any], *, recipient: str, operation_id: str, message_id: str) -> None:
     if result.get("accepted") is not True:
         raise AwikiRemoteDeliveryError("remote_direct_not_accepted", data={"recipient_did": recipient, "remote_result": result})
-    if result.get("final_acceptance") is not True:
-        raise AwikiRemoteDeliveryError("remote_direct_final_acceptance_required", data={"recipient_did": recipient, "remote_result": result})
     if result.get("message_id") != message_id:
         raise AwikiRemoteDeliveryError("remote_direct_message_id_mismatch", data={"recipient_did": recipient, "remote_result": result})
     if result.get("operation_id") != operation_id:
@@ -538,7 +602,6 @@ def direct_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
     meta = params.get("_anp_meta") if isinstance(params.get("_anp_meta"), dict) else {}
     envelope_body = params.get("_anp_body") if isinstance(params.get("_anp_body"), dict) else None
     auth = params.get("_anp_auth") if isinstance(params.get("_anp_auth"), dict) else None
-    client = params.get("_anp_client") if isinstance(params.get("_anp_client"), dict) else None
     authenticated_sender = current_did(request, required=not public_rpc)
     sender = params.get("sender_did") or authenticated_sender
     recipient = params.get("recipient_did") or params.get("to")
@@ -592,10 +655,21 @@ def direct_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
             idempotency_operation_id=operation_id,
             sender_local=sender_local,
             recipient_local=True,
+            meta=meta,
+            auth=auth,
+            origin_proof_verified=True,
         )
 
     if not sender_local:
         raise Unauthorized("sender_not_local", data={"sender_did": sender})
+    if _is_anp_envelope(params):
+        validate_origin_proof_structure(
+            auth,
+            method="direct.send",
+            meta=meta,
+            body=proof_body,
+            sender_did_document=_resolve_did_document_for_proof(request, sender),
+        )
     if recipient_local:
         if _is_daemon_heartbeat(meta, proof_body, content_type):
             return _accept_ephemeral_direct(
@@ -619,6 +693,9 @@ def direct_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
             idempotency_operation_id=operation_id,
             sender_local=True,
             recipient_local=True,
+            meta=meta or None,
+            auth=auth,
+            origin_proof_verified=_is_anp_envelope(params),
         )
     if _did_belongs_to_domain(recipient, settings.did_domain):
         raise NotFound("recipient_not_found", data={"recipient_did": recipient})
@@ -651,7 +728,6 @@ def direct_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
         operation_id=response_operation_id,
         meta=meta,
         auth=auth,
-        client=client,
         service_identity=getattr(request.app.state, "service_identity", None),
     )
     return _store_direct_message(
@@ -666,7 +742,10 @@ def direct_send(params: dict[str, Any], request: Request) -> dict[str, Any]:
         sender_local=True,
         recipient_local=False,
         delivery_state=str(remote.get("delivery_state") or "accepted"),
-        final_acceptance=bool(remote.get("final_acceptance", False)),
+        final_acceptance=bool(remote.get("final_acceptance", True)),
+        meta=meta,
+        auth=auth,
+        origin_proof_verified=True,
     )
 
 
@@ -1499,7 +1578,173 @@ def mark_read(params: dict[str, Any], request: Request) -> dict[str, Any]:
         "read_up_to_seq": saved_seq,
     }
 
-def sync_delta(params: dict[str, Any], request: Request) -> dict[str, Any]:
+def _sync_v2_identity(request: Request) -> tuple[str, str, str]:
+    owner = current_did(request)
+    with get_store(request).connect() as conn:
+        row = conn.execute(
+            """
+            SELECT d.document_json
+            FROM users u JOIN did_documents d ON d.did = u.did
+            WHERE u.did = ? AND u.revoked_at IS NULL AND d.status = 'active'
+            """,
+            (owner,),
+        ).fetchone()
+    if not row:
+        raise Unauthorized("sync.device_binding_missing")
+    document = _load(row["document_json"])
+    manifest = document.get("deviceManifest") if isinstance(document, dict) else None
+    devices = manifest.get("devices") if isinstance(manifest, dict) else None
+    if not isinstance(devices, list) or len(devices) != 1 or not isinstance(devices[0], dict):
+        raise NotSupported("sync.multiple_devices_not_supported")
+    device_id = devices[0].get("device_id")
+    if not isinstance(device_id, str) or not device_id.strip():
+        raise InvalidParams("sync.device_id_required")
+    account_id = f"user-{hashlib.sha256(owner.encode()).hexdigest()[:24]}"
+    return owner, account_id, device_id
+
+
+def _sync_v2_profile(params: dict[str, Any]) -> bool:
+    meta = params.get("_anp_meta") if isinstance(params.get("_anp_meta"), dict) else {}
+    return meta.get("profile") == "anp.sync.local.v2"
+
+
+def sync_bootstrap_v2(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    owner, account_id, device_id = _sync_v2_identity(request)
+    body = params.get("_anp_body") if isinstance(params.get("_anp_body"), dict) else params
+    if set(body) != {"client_instance_id", "capabilities"}:
+        raise InvalidParams("sync.bootstrap_body_invalid")
+    client_instance_id = body.get("client_instance_id")
+    capabilities_value = body.get("capabilities")
+    if not isinstance(client_instance_id, str) or not client_instance_id.strip() or len(client_instance_id) > 255:
+        raise InvalidParams("sync.client_instance_id_invalid")
+    if capabilities_value != {"sync_profile": "anp.sync.local.v2", "event_schema_max": 1}:
+        raise InvalidParams("sync.bootstrap_capabilities_invalid")
+    timestamp = now_iso()
+    with get_store(request).connect() as conn:
+        existing = conn.execute("SELECT * FROM sync_v2_bindings WHERE owner_did = ?", (owner,)).fetchone()
+        if existing and (existing["device_id"] != device_id or existing["client_instance_id"] != client_instance_id):
+            raise NotSupported(
+                "sync.multiple_devices_not_supported",
+                data={"mode": "single_device_pull_only"},
+            )
+        if not existing:
+            conn.execute(
+                """
+                INSERT INTO sync_v2_bindings(
+                  owner_did, account_id, device_id, client_instance_id, stream_epoch, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 1, ?, ?)
+                """,
+                (owner, account_id, device_id, client_instance_id, timestamp, timestamp),
+            )
+    return {
+        "mode": "tail_only",
+        "account_id": account_id,
+        "device_id": device_id,
+        "server_time": timestamp,
+        # Open Server has one device and no replica handoff. A fresh binding
+        # starts at zero so that the one local device pulls its complete retained
+        # account stream instead of relying on cross-device snapshot transfer.
+        "cursor": {"stream_epoch": "1", "scan_seq": "0"},
+        "read_state_baseline": [],
+        "group_state_baseline": [],
+        "warnings": ["single_device_pull_only"],
+    }
+
+
+def _sync_v2_event(row: Any, *, owner: str, account_id: str) -> dict[str, Any]:
+    original = _load(row["payload_json"])
+    message = original.get("message") if isinstance(original.get("message"), dict) else {}
+    thread = original.get("thread") if isinstance(original.get("thread"), dict) else {}
+    original_type = str(row["event_type"])
+    is_direct_message = original_type.startswith("direct.message.")
+    is_group_message = original_type.startswith("group.message.")
+    message_id = message.get("message_id") or original.get("message_id")
+    group_did = message.get("group_did") or original.get("group_did") or thread.get("group_did")
+    sender_did = message.get("sender_did") or original.get("sender_did")
+    recipient_did = message.get("recipient_did") or message.get("receiver_did")
+    if is_direct_message or is_group_message:
+        peer_did = thread.get("peer_did")
+        thread_key = str(group_did) if is_group_message else f"direct:{peer_did}"
+        direction = "outgoing/self" if sender_did == owner else "incoming"
+        event_type = "message.created"
+        payload = {
+            "message_kind": "group_plain" if is_group_message else "direct_plain",
+            "direction": direction,
+            "sender_did_snapshot": sender_did,
+            "recipient_did_snapshot": recipient_did or owner,
+            "client_message_id": message_id,
+        }
+        if is_group_message:
+            payload["group_did"] = group_did
+        aggregate_kind = "group_message" if is_group_message else "direct_message"
+        aggregate_id = str(message_id)
+        ignore_safe = False
+    else:
+        event_type = f"awiki.open.{original_type}"
+        payload = original
+        aggregate_kind = "event"
+        aggregate_id = str(original.get("group_did") or row["event_id"])
+        thread_key = str(group_did) if group_did else None
+        ignore_safe = True
+    return {
+        "event_id": str(row["event_id"]),
+        "stream_epoch": "1",
+        "event_seq": str(row["event_seq"]),
+        "event_type": event_type,
+        "schema_version": 1,
+        "ignore_safe": ignore_safe,
+        "account_id": account_id,
+        "recipient_device_id": None,
+        "origin_did": sender_did,
+        "origin_device_id": None,
+        "aggregate_kind": aggregate_kind,
+        "aggregate_id": aggregate_id,
+        "state_version": None,
+        "thread_key": thread_key,
+        "occurred_at": str(row["created_at"]),
+        "payload": payload,
+        "source": {},
+    }
+
+
+def sync_delta_v2(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    owner, account_id, device_id = _sync_v2_identity(request)
+    body = params.get("_anp_body") if isinstance(params.get("_anp_body"), dict) else params
+    if set(body) != {"cursor", "limit", "reason"}:
+        raise InvalidParams("sync.delta_body_invalid")
+    cursor = body.get("cursor")
+    if not isinstance(cursor, dict) or set(cursor) != {"stream_epoch", "scan_seq"}:
+        raise InvalidParams("sync.invalid_cursor")
+    if cursor.get("stream_epoch") != "1":
+        raise InvalidParams("sync.invalid_cursor")
+    after = _parse_non_negative_int(cursor.get("scan_seq"), field="sync.scan_seq", default=0)
+    limit = _parse_non_negative_int(body.get("limit"), field="limit", default=100)
+    if not 1 <= limit <= 500 or not isinstance(body.get("reason"), str):
+        raise InvalidParams("sync.delta_body_invalid")
+    with get_store(request).connect() as conn:
+        binding = conn.execute("SELECT 1 FROM sync_v2_bindings WHERE owner_did = ? AND device_id = ?", (owner, device_id)).fetchone()
+        if not binding:
+            raise InvalidParams("SYNC_BOOTSTRAP_REQUIRED")
+        rows = conn.execute(
+            "SELECT * FROM sync_events WHERE owner_did = ? AND event_seq > ? ORDER BY event_seq LIMIT ?",
+            (owner, after, limit + 1),
+        ).fetchall()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    events = [_sync_v2_event(row, owner=owner, account_id=account_id) for row in rows]
+    next_seq = events[-1]["event_seq"] if events else str(after)
+    return {
+        "mode": "delta",
+        "server_time": now_iso(),
+        "events": events,
+        "next_cursor": {"stream_epoch": "1", "scan_seq": next_seq},
+        "has_more": has_more,
+        "recovery": None,
+        "warnings": ["single_device_pull_only"],
+    }
+
+
+def _sync_delta_v1(params: dict[str, Any], request: Request) -> dict[str, Any]:
     owner = current_did(request)
     user_did = params.get("user_did")
     if user_did and user_did != owner:
@@ -1535,20 +1780,26 @@ def sync_delta(params: dict[str, Any], request: Request) -> dict[str, Any]:
             or payload.get("thread_id")
             or row["event_id"]
         )
-        event_type = str(row["event_type"])
-        if event_type.startswith("direct.message."):
+        stored_event_type = str(row["event_type"])
+        if stored_event_type.startswith("direct.message."):
             aggregate_kind = "direct_message"
-        elif event_type.startswith("group.message."):
+        elif stored_event_type.startswith("group.message."):
             aggregate_kind = "group_message"
-        elif event_type.startswith("group."):
+        elif stored_event_type.startswith("group."):
             aggregate_kind = "group"
-        elif event_type.startswith("read_state."):
+        elif stored_event_type.startswith("read_state."):
             aggregate_kind = "read_state"
         else:
             aggregate_kind = "event"
+        event_type = (
+            "message.created"
+            if stored_event_type in {"direct.message.created", "group.message.created"}
+            else stored_event_type
+        )
         events.append(
             {
                 **dict(row),
+                "event_type": event_type,
                 "event_seq": str(row["event_seq"]),
                 "owner_subject_id": row["owner_did"],
                 "aggregate_kind": aggregate_kind,
@@ -1569,7 +1820,13 @@ def sync_delta(params: dict[str, Any], request: Request) -> dict[str, Any]:
     }
 
 
-def thread_after(params: dict[str, Any], request: Request) -> dict[str, Any]:
+def sync_delta(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    if _sync_v2_profile(params):
+        return sync_delta_v2(params, request)
+    return _sync_delta_v1(params, request)
+
+
+def _thread_after_v1(params: dict[str, Any], request: Request) -> dict[str, Any]:
     owner = current_did(request)
     user_did = params.get("user_did")
     if user_did and user_did != owner:
@@ -1643,6 +1900,127 @@ def thread_after(params: dict[str, Any], request: Request) -> dict[str, Any]:
     }
 
 
+def _hydrated_sync_v2_message(conn: Any, *, owner: str, message_id: str) -> dict[str, Any] | None:
+    direct = conn.execute(
+        """
+        SELECT m.*, v.read_at FROM direct_messages m
+        JOIN direct_message_views v ON v.message_id = m.message_id
+        WHERE v.owner_did = ? AND m.message_id = ?
+        """,
+        (owner, message_id),
+    ).fetchone()
+    if direct:
+        message = _direct_message_result(direct, owner)
+        message["thread_kind"] = "direct"
+        message["client_msg_id"] = message.get("operation_id") or message_id
+        return message
+    hosted = conn.execute(
+        """
+        SELECT m.*, m.group_event_seq AS server_seq
+        FROM hosted_group_messages m
+        JOIN hosted_group_members member ON member.group_did = m.group_did
+        WHERE member.agent_did = ? AND member.status = 'active' AND m.message_id = ?
+        """,
+        (owner, message_id),
+    ).fetchone()
+    if hosted:
+        message = _group_message_result(hosted)
+        message["thread_kind"] = "group"
+        message["receiver_did"] = owner
+        message["client_msg_id"] = message.get("operation_id") or message_id
+        return message
+    legacy = conn.execute(
+        """
+        SELECT m.* FROM group_messages m
+        JOIN group_members member ON member.group_did = m.group_did
+        WHERE member.member_did = ? AND m.message_id = ?
+        """,
+        (owner, message_id),
+    ).fetchone()
+    if legacy:
+        message = _group_message_result(legacy)
+        message["thread_kind"] = "group"
+        message["receiver_did"] = owner
+        message["client_msg_id"] = message.get("operation_id") or message_id
+        return message
+    return None
+
+
+def message_get_batch_v2(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    owner, _, _ = _sync_v2_identity(request)
+    body = params.get("_anp_body") if isinstance(params.get("_anp_body"), dict) else params
+    if set(body) != {"event_ids"} or not isinstance(body.get("event_ids"), list):
+        raise InvalidParams("message.get_batch_body_invalid")
+    event_ids = body["event_ids"]
+    if not 1 <= len(event_ids) <= 100 or len(set(event_ids)) != len(event_ids) or not all(isinstance(item, str) and item for item in event_ids):
+        raise InvalidParams("message.get_batch_event_ids_invalid")
+    items: list[dict[str, Any]] = []
+    unavailable: list[str] = []
+    with get_store(request).connect() as conn:
+        for event_id in event_ids:
+            event = conn.execute(
+                "SELECT payload_json FROM sync_events WHERE owner_did = ? AND event_id = ?",
+                (owner, event_id),
+            ).fetchone()
+            payload = _load(event["payload_json"]) if event else {}
+            message_ref = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+            message_id = message_ref.get("message_id") or payload.get("message_id")
+            message = _hydrated_sync_v2_message(conn, owner=owner, message_id=str(message_id)) if message_id else None
+            if message is None:
+                unavailable.append(event_id)
+            else:
+                items.append({"event_id": event_id, "message": message})
+    return {"items": items, "unavailable": unavailable}
+
+
+def thread_after_v2(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    owner, _, _ = _sync_v2_identity(request)
+    body = params.get("_anp_body") if isinstance(params.get("_anp_body"), dict) else params
+    if set(body) != {"thread_key", "after_server_seq", "limit"}:
+        raise InvalidParams("sync.thread_after_body_invalid")
+    thread_key = body.get("thread_key")
+    if not isinstance(thread_key, str) or not thread_key:
+        raise InvalidParams("thread_key_required")
+    if thread_key.startswith("direct:"):
+        mapped = {
+            "thread": {"kind": "direct", "peer_did": thread_key.removeprefix("direct:")},
+            "after_server_seq": body.get("after_server_seq"),
+            "limit": body.get("limit"),
+        }
+        thread_kind = "direct"
+    else:
+        group_did = thread_key.removeprefix("group:")
+        mapped = {
+            "thread": {"kind": "group", "group_did": group_did},
+            "after_server_seq": body.get("after_server_seq"),
+            "limit": body.get("limit"),
+        }
+        thread_kind = "group"
+    result = _thread_after_v1(mapped, request)
+    messages = []
+    for item in result["messages"]:
+        message = dict(item)
+        message["thread_kind"] = thread_kind
+        message["client_msg_id"] = message.get("operation_id") or message.get("message_id")
+        if thread_kind == "direct":
+            message.setdefault("receiver_did", message.get("recipient_did") or owner)
+        else:
+            message.setdefault("receiver_did", owner)
+        messages.append(message)
+    return {
+        "messages": messages,
+        "next_after_server_seq": result["next_after_server_seq"],
+        "has_more": result["has_more"],
+        "warnings": ["single_device_pull_only"],
+    }
+
+
+def thread_after(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    if _sync_v2_profile(params):
+        return thread_after_v2(params, request)
+    return _thread_after_v1(params, request)
+
+
 def _group_get_info_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
     if is_hosted_group(request, params.get("group_did")):
         return hosted_group_get_info(params, request)
@@ -1702,11 +2080,17 @@ def _group_send_dispatch(params: dict[str, Any], request: Request) -> dict[str, 
 
 def _group_members_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
     refresh_status: dict[str, Any] | None = None
+    group_did = params.get("group_did")
     if is_hosted_group(request, params.get("group_did")):
         members = hosted_group_list_members(params, request)
         source = "hosted_projection"
+        with get_store(request).connect() as conn:
+            group = conn.execute(
+                "SELECT group_state_version FROM hosted_groups WHERE group_did = ?",
+                (group_did,),
+            ).fetchone()
+        group_state_version = str(group["group_state_version"])
     elif has_group_projection(request, params.get("group_did")):
-        group_did = params.get("group_did")
         if not isinstance(group_did, str) or not group_did:
             raise InvalidParams("group_did_required")
         try:
@@ -1716,10 +2100,20 @@ def _group_members_dispatch(params: dict[str, Any], request: Request) -> dict[st
             refresh_status = {"status": "failed", "error": exc.error_message}
         members = projected_group_list_members(params, request)
         source = "remote_projection"
+        group_state_version = "1"
     else:
         members = group_members(params, request)
         source = "legacy_local"
-    result = {"members": members, "total": len(members), "source": source}
+        group_state_version = "1"
+    result = {
+        "group_did": group_did,
+        "group_state_version": group_state_version,
+        "members": members,
+        "total": len(members),
+        "has_more": False,
+        "source": source,
+        "warnings": [],
+    }
     if refresh_status is not None:
         result["projection_refresh"] = refresh_status
     return result
@@ -1780,7 +2174,9 @@ MESSAGE_HANDLERS = {
     "inbox.mark_read": inbox_mark_read,
     "read_state.mark_read": mark_read,
     "sync.delta": sync_delta,
+    "sync.bootstrap": sync_bootstrap_v2,
     "sync.thread_after": thread_after,
+    "message.get_batch": message_get_batch_v2,
     "group.get_info": _group_get_info_dispatch,
     "group.join": _group_join_dispatch,
     "group.leave": _group_leave_dispatch,

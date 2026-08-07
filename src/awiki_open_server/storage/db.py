@@ -10,6 +10,12 @@ PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS users (
   did TEXT PRIMARY KEY,
   handle TEXT UNIQUE NOT NULL,
@@ -77,6 +83,28 @@ CREATE TABLE IF NOT EXISTS direct_messages (
   content_type TEXT NOT NULL DEFAULT 'text/plain',
   created_at TEXT NOT NULL,
   server_seq INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS protocol_operations (
+  method TEXT NOT NULL,
+  sender_did TEXT NOT NULL,
+  operation_id TEXT NOT NULL,
+  request_digest TEXT NOT NULL,
+  result_json TEXT,
+  error_json TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(method, sender_did, operation_id)
+);
+
+CREATE TABLE IF NOT EXISTS sync_v2_bindings (
+  owner_did TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  client_instance_id TEXT NOT NULL,
+  stream_epoch INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(account_id, device_id)
 );
 
 CREATE TABLE IF NOT EXISTS direct_message_views (
@@ -369,6 +397,15 @@ class Store:
             conn.executescript(SCHEMA)
             self.ensure_column(conn, "direct_messages", "content_type", "TEXT NOT NULL DEFAULT 'text/plain'")
             self.ensure_column(conn, "direct_messages", "operation_id", "TEXT")
+            self.ensure_column(conn, "direct_messages", "meta_json", "TEXT")
+            self.ensure_column(conn, "direct_messages", "origin_auth_json", "TEXT")
+            self.ensure_column(conn, "direct_messages", "origin_proof_verified", "INTEGER NOT NULL DEFAULT 0")
+            self.ensure_column(conn, "direct_messages", "authoritative_sender_did", "TEXT")
+            self.ensure_column(conn, "direct_messages", "security_profile", "TEXT NOT NULL DEFAULT 'transport-protected'")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS direct_messages_sender_operation "
+                "ON direct_messages(sender_did, operation_id) WHERE operation_id IS NOT NULL"
+            )
             self.ensure_column(conn, "group_messages", "content_type", "TEXT NOT NULL DEFAULT 'text/plain'")
             self.ensure_column(conn, "group_messages", "operation_id", "TEXT")
             self.ensure_column(conn, "users", "refresh_token", "TEXT")
@@ -390,6 +427,15 @@ class Store:
             if "invite_token" in legacy_group_columns:
                 conn.execute("UPDATE groups SET invite_token = NULL WHERE invite_token IS NOT NULL")
                 conn.execute("UPDATE groups SET join_mode = 'closed_legacy' WHERE join_mode = 'invite_token'")
+            conn.executemany(
+                "INSERT OR IGNORE INTO schema_migrations(version, name) VALUES (?, ?)",
+                [
+                    (1, "protocol-api-alignment-foundation"),
+                    (2, "direct-canonical-proof-and-idempotency"),
+                    (3, "attachment-canonical-digest-contract"),
+                    (4, "single-device-sync-v2-wire-compatibility"),
+                ],
+            )
             self.seed_groups(conn, did_domain)
 
     @contextmanager

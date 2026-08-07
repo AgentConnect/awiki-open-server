@@ -159,6 +159,8 @@ def test_im_websocket_accepts_ws_ticket(tmp_path):
 
     assert notification["method"] == "sync"
     assert notification["params"]["owner_did"] == registered["did"]
+    assert notification["params"]["meta"]["profile"] == "anp.sync.local.v1"
+    assert notification["params"]["body"]["recovery"] == "call sync.delta and sync.thread_after"
     assert "event_seq" not in notification["params"]
     assert "checkpoint" not in notification["params"]
 
@@ -203,6 +205,9 @@ def test_im_websocket_receives_direct_and_group_notifications(tmp_path):
             assert direct_notification["method"] == "direct.incoming"
             assert direct_notification["params"]["message"]["message_id"] == sent["message_id"]
             assert direct_notification["params"]["message"]["body"]["text"] == "hello over ws"
+            assert direct_notification["params"]["meta"]["profile"] == "anp.direct.local.v1"
+            assert direct_notification["params"]["meta"]["message_id"] == sent["message_id"]
+            assert direct_notification["params"]["body"]["message"]["message_id"] == sent["message_id"]
             assert direct_notification["sync"]["event_type"] == "direct.message.created"
             assert "server_seq" not in direct_notification["sync"]
             assert "checkpoint" not in direct_notification["sync"]
@@ -222,6 +227,7 @@ def test_im_websocket_receives_direct_and_group_notifications(tmp_path):
             assert state_notification["method"] == "group.state_changed"
             assert state_notification["params"]["change"] == "member_joined"
             assert state_notification["params"]["group_did"] == group_did
+            assert state_notification["params"]["meta"]["profile"] == "anp.group.local.v1"
 
             group_msg = client.post(
                 "/im/rpc",
@@ -237,6 +243,8 @@ def test_im_websocket_receives_direct_and_group_notifications(tmp_path):
             assert group_notification["method"] == "group.incoming"
             assert group_notification["params"]["message"]["message_id"] == group_msg["message_id"]
             assert group_notification["params"]["message"]["body"]["text"] == "group over ws"
+            assert group_notification["params"]["meta"]["profile"] == "anp.group.local.v1"
+            assert group_notification["params"]["body"]["message"]["message_id"] == group_msg["message_id"]
             assert group_notification["sync"]["event_type"] == "group.message.created"
             assert "server_seq" not in group_notification["sync"]
             assert "read_watermark_server_seq" not in group_notification["sync"]

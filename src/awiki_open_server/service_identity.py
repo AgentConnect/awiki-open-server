@@ -27,9 +27,11 @@ from awiki_open_server.protocol.anp_adapter import (
     generate_service_http_signature_headers,
     has_verification_method,
     is_verification_method_authorized,
+    signature_keyid,
     verify_origin_proof,
     verify_service_http_signature,
 )
+from awiki_open_server.protocol.registry import STANDARD_PROFILES
 from awiki_open_server.shared.errors import InvalidParams, Unauthorized
 
 
@@ -100,12 +102,7 @@ def _service_entry(did: str, endpoint: str) -> dict[str, Any]:
         "type": "ANPMessageService",
         "serviceEndpoint": endpoint,
         "serviceDid": did,
-        "profiles": [
-            "anp.core.binding.v1",
-            "anp.direct.base.v1",
-            "anp.group.base.v1",
-            "anp.attachment.v1",
-        ],
+        "profiles": list(STANDARD_PROFILES),
         "securityProfiles": ["transport-protected"],
         "authSchemes": ["bearer", "didwba"],
     }
@@ -360,8 +357,10 @@ def require_signed_peer_request(headers: dict[str, str], *, allow_unsigned_dev: 
         return
     if not _header_value(headers, "Signature-Input") or not _header_value(headers, "Signature"):
         raise Unauthorized("missing_peer_http_signature")
-    if not _header_value(headers, "x-anp-source-service-did"):
-        raise Unauthorized("missing_source_service_did")
+    try:
+        signature_keyid(headers)
+    except AnpProtocolError as exc:
+        raise Unauthorized(exc.code, data={"detail": exc.detail}) from exc
 
 
 def load_private_key_setting(value: str | None, path: str | None) -> str | None:

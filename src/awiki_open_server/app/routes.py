@@ -7,7 +7,7 @@ from contextlib import suppress
 import secrets
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import PlainTextResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
 from awiki_open_server.services import (
     CONTENT_HANDLERS,
@@ -23,9 +23,10 @@ from awiki_open_server.services import (
     upload_slot,
 )
 from awiki_open_server.messaging.groups.outbox import group_operations_status
+from awiki_open_server.protocol.registry import PUBLIC_ANP_METHODS, PUBLIC_NOTIFICATION_METHODS, STANDARD_PROFILES
 from awiki_open_server.shared.errors import AwikiError, InvalidParams, NotFound, Unauthorized
 from awiki_open_server.shared.ids import now_iso
-from awiki_open_server.shared.jsonrpc import dispatch
+from awiki_open_server.shared.jsonrpc import dispatch, parse_error
 from awiki_open_server.user_compat import (
     AGENT_INVENTORY_HANDLERS,
     AGENT_REGISTRATION_HANDLERS,
@@ -68,26 +69,6 @@ def _http_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=str(exc))
 
 
-PUBLIC_ANP_METHODS = [
-    "anp.get_capabilities",
-    "direct.send",
-    "group.create",
-    "group.get_info",
-    "group.join",
-    "group.add",
-    "group.remove",
-    "group.rebind_member",
-    "group.leave",
-    "group.update_profile",
-    "group.update_policy",
-    "group.send",
-    "group.incoming",
-    "group.state_changed",
-    "attachment.get_download_ticket",
-]
-GROUP_NOTIFICATION_METHODS = {"group.incoming", "group.state_changed"}
-
-
 def mount_routes(app: FastAPI) -> None:
     settings = app.state.settings
 
@@ -109,42 +90,42 @@ def mount_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=401, detail="unauthorized")
         return group_operations_status(app)
 
-    @app.post("/did-auth/rpc")
+    @app.post("/user-service/v1/did-auth/rpc")
+    @app.post("/user-service/did-auth/rpc", include_in_schema=False)
+    @app.post("/did-auth/rpc", include_in_schema=False)
     async def did_auth_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, IDENTITY_HANDLERS)
 
-    @app.post("/user-service/did-auth/rpc")
-    async def did_auth_rpc_compat(payload: dict, request: Request):
-        return await dispatch(payload, request, IDENTITY_HANDLERS)
-
-    @app.post("/did-verify/rpc")
-    @app.post("/user-service/did-verify/rpc")
+    @app.post("/user-service/v1/did-verify/rpc")
+    @app.post("/user-service/did-verify/rpc", include_in_schema=False)
+    @app.post("/did-verify/rpc", include_in_schema=False)
     async def did_verify_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, DID_VERIFY_HANDLERS)
 
-    @app.post("/did/profile/rpc")
+    @app.post("/user-service/v1/did/profile/rpc")
+    @app.post("/user-service/did/profile/rpc", include_in_schema=False)
+    @app.post("/did/profile/rpc", include_in_schema=False)
     async def did_profile_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, PROFILE_HANDLERS)
 
-    @app.post("/user-service/did/profile/rpc")
-    async def did_profile_rpc_compat(payload: dict, request: Request):
-        return await dispatch(payload, request, PROFILE_HANDLERS)
-
-    @app.post("/me/rpc")
-    @app.post("/user-service/me/rpc")
+    @app.post("/user-service/v1/me/rpc")
+    @app.post("/user-service/me/rpc", include_in_schema=False)
+    @app.post("/me/rpc", include_in_schema=False)
     async def me_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, ME_HANDLERS)
 
-    @app.get("/me")
-    @app.get("/user-service/me")
+    @app.get("/user-service/v1/me")
+    @app.get("/user-service/me", include_in_schema=False)
+    @app.get("/me", include_in_schema=False)
     async def me_rest(request: Request):
         try:
             return legacy_me_profile({}, request)
         except Exception as exc:
             raise _http_error(exc) from exc
 
-    @app.patch("/me")
-    @app.patch("/user-service/me")
+    @app.patch("/user-service/v1/me")
+    @app.patch("/user-service/me", include_in_schema=False)
+    @app.patch("/me", include_in_schema=False)
     async def me_update_rest(request: Request):
         payload = await request.json()
         try:
@@ -152,16 +133,18 @@ def mount_routes(app: FastAPI) -> None:
         except Exception as exc:
             raise _http_error(exc) from exc
 
-    @app.get("/users/{user_id}/profile")
-    @app.get("/user-service/users/{user_id}/profile")
+    @app.get("/user-service/v1/users/{user_id}/profile")
+    @app.get("/user-service/users/{user_id}/profile", include_in_schema=False)
+    @app.get("/users/{user_id}/profile", include_in_schema=False)
     async def user_public_profile(user_id: str, request: Request):
         try:
             return legacy_public_profile({"user_id": user_id}, request)
         except Exception as exc:
             raise _http_error(exc) from exc
 
-    @app.get("/profiles/{user_id}")
-    @app.get("/user-service/profiles/{user_id}")
+    @app.get("/user-service/v1/profiles/{user_id}")
+    @app.get("/user-service/profiles/{user_id}", include_in_schema=False)
+    @app.get("/profiles/{user_id}", include_in_schema=False)
     async def user_profile_markdown(user_id: str, request: Request):
         try:
             markdown = profile_markdown(user_id, request)
@@ -169,130 +152,158 @@ def mount_routes(app: FastAPI) -> None:
             raise _http_error(exc) from exc
         return PlainTextResponse(markdown, media_type="text/markdown")
 
-    @app.post("/user-service/handle/rpc")
-    async def handle_rpc_compat(payload: dict, request: Request):
-        return await dispatch(payload, request, HANDLE_HANDLERS)
-
-    @app.post("/handle/rpc")
+    @app.post("/user-service/v1/handle/rpc")
+    @app.post("/user-service/handle/rpc", include_in_schema=False)
+    @app.post("/handle/rpc", include_in_schema=False)
     async def handle_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, HANDLE_HANDLERS)
 
-    @app.post("/content/rpc")
+    @app.post("/user-service/v1/content/rpc")
+    @app.post("/user-service/content/rpc", include_in_schema=False)
+    @app.post("/content/rpc", include_in_schema=False)
     async def content_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, CONTENT_HANDLERS)
 
-    @app.post("/user-service/content/rpc")
-    async def content_rpc_compat(payload: dict, request: Request):
-        return await dispatch(payload, request, CONTENT_HANDLERS)
-
-    @app.post("/did/relationships/rpc")
-    @app.post("/user-service/did/relationships/rpc")
+    @app.post("/user-service/v1/did/relationships/rpc")
+    @app.post("/user-service/did/relationships/rpc", include_in_schema=False)
+    @app.post("/did/relationships/rpc", include_in_schema=False)
     async def did_relationships_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, DID_RELATIONSHIP_HANDLERS)
 
-    @app.post("/users/rpc")
-    @app.post("/user-service/users/rpc")
+    @app.post("/user-service/v1/users/rpc")
+    @app.post("/user-service/users/rpc", include_in_schema=False)
+    @app.post("/users/rpc", include_in_schema=False)
     async def users_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, USERS_HANDLERS)
 
-    @app.post("/site/rpc")
+    @app.post("/user-service/v1/site/rpc")
+    @app.post("/user-service/site/rpc", include_in_schema=False)
+    @app.post("/site/rpc", include_in_schema=False)
     async def site_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, SITE_HANDLERS)
 
-    @app.post("/user-service/agent-registration/rpc")
+    @app.post("/user-service/v1/agent-registration/rpc")
+    @app.post("/user-service/agent-registration/rpc", include_in_schema=False)
     async def agent_registration_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, AGENT_REGISTRATION_HANDLERS)
 
-    @app.post("/user-service/agent-inventory/rpc")
+    @app.post("/user-service/v1/agent-inventory/rpc")
+    @app.post("/user-service/agent-inventory/rpc", include_in_schema=False)
     async def agent_inventory_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, AGENT_INVENTORY_HANDLERS)
 
-    @app.post("/user-service/message-agent/rpc")
-    async def message_agent_rpc(payload: dict, request: Request):
+    @app.post("/user-service/v1/personal-agent/rpc")
+    @app.post("/user-service/personal-agent/rpc", include_in_schema=False)
+    @app.post("/user-service/message-agent/rpc", include_in_schema=False)
+    async def personal_agent_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, MESSAGE_AGENT_HANDLERS)
 
     async def im_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, MESSAGE_HANDLERS)
     app.add_api_route(settings.im_rpc_path, im_rpc, methods=["POST"])
 
-    @app.post("/group/rpc")
-    @app.post("/user-service/group/rpc")
+    @app.post("/user-service/v1/group/rpc")
+    @app.post("/user-service/group/rpc", include_in_schema=False)
+    @app.post("/group/rpc", include_in_schema=False)
     async def group_compat_rpc(payload: dict, request: Request):
         return await dispatch(payload, request, GROUP_COMPAT_HANDLERS)
 
     async def anp_im_rpc(request: Request):
         raw_body = await request.body()
         request.state.raw_body = raw_body
-        payload = json.loads(raw_body.decode() or "{}")
-        method = payload.get("method")
-        if method in GROUP_NOTIFICATION_METHODS and "id" in payload:
-            return {
-                "jsonrpc": "2.0",
-                "error": {"code": -32600, "message": "group.notification_must_not_have_id"},
-                "id": payload.get("id"),
-            }
-        public_handlers = {name: MESSAGE_HANDLERS[name] for name in PUBLIC_ANP_METHODS}
-        result = await dispatch(payload, request, public_handlers)
-        if method in GROUP_NOTIFICATION_METHODS:
-            if "error" in result:
-                return result
+        try:
+            payload = json.loads(raw_body.decode())
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return JSONResponse(parse_error())
+        public_handlers = {
+            name: MESSAGE_HANDLERS[name]
+            for name in PUBLIC_ANP_METHODS
+            if name in MESSAGE_HANDLERS
+        }
+        result = await dispatch(
+            payload,
+            request,
+            public_handlers,
+            strict_anp=True,
+            surface="public",
+        )
+        method = payload.get("method") if isinstance(payload, dict) else None
+        if method in PUBLIC_NOTIFICATION_METHODS and "id" not in payload:
             return Response(status_code=204)
+        if result is None:
+            return Response(status_code=204)
+        error = result.get("error")
+        if isinstance(error, dict) and error.get("code") == 1005:
+            return JSONResponse(result, status_code=401)
         return result
     app.add_api_route(settings.anp_public_rpc_path, anp_im_rpc, methods=["POST"])
 
-    @app.post("/auth/sms-codes")
-    @app.post("/user-service/auth/sms-codes")
+    @app.post("/user-service/v1/auth/sms-codes")
+    @app.post("/user-service/auth/sms-codes", include_in_schema=False)
+    @app.post("/auth/sms-codes", include_in_schema=False)
     async def sms_codes(request: Request):
         return await user_compat_sms_codes(request)
 
-    @app.post("/auth/sms")
-    @app.post("/user-service/auth/sms")
+    @app.post("/user-service/v1/auth/sms")
+    @app.post("/user-service/auth/sms", include_in_schema=False)
+    @app.post("/auth/sms", include_in_schema=False)
     async def sms_login(request: Request):
         return await user_compat_sms_login(request)
 
-    @app.post("/auth/email-send")
-    @app.post("/user-service/auth/email-send")
+    @app.post("/user-service/v1/auth/email-send")
+    @app.post("/user-service/auth/email-send", include_in_schema=False)
+    @app.post("/auth/email-send", include_in_schema=False)
     async def email_send(request: Request):
         return await user_compat_email_send(request)
 
-    @app.get("/auth/email-status")
-    @app.get("/user-service/auth/email-status")
+    @app.get("/user-service/v1/auth/email-status")
+    @app.get("/user-service/auth/email-status", include_in_schema=False)
+    @app.get("/auth/email-status", include_in_schema=False)
     async def email_status(request: Request):
         return await user_compat_email_status(request)
 
-    @app.post("/auth/phone-bind-send")
-    @app.post("/user-service/auth/phone-bind-send")
+    @app.post("/user-service/v1/auth/phone-bind-send")
+    @app.post("/user-service/auth/phone-bind-send", include_in_schema=False)
+    @app.post("/auth/phone-bind-send", include_in_schema=False)
     async def phone_bind_send(request: Request):
         return await user_compat_phone_bind_send(request)
 
-    @app.post("/auth/phone-bind-verify")
-    @app.post("/user-service/auth/phone-bind-verify")
+    @app.post("/user-service/v1/auth/phone-bind-verify")
+    @app.post("/user-service/auth/phone-bind-verify", include_in_schema=False)
+    @app.post("/auth/phone-bind-verify", include_in_schema=False)
     async def phone_bind_verify(request: Request):
         return await user_compat_phone_bind_verify(request)
 
-    @app.post("/auth/token-refresh")
-    @app.post("/user-service/auth/token-refresh")
+    @app.post("/user-service/v1/auth/token-refresh")
+    @app.post("/user-service/auth/token-refresh", include_in_schema=False)
+    @app.post("/auth/token-refresh", include_in_schema=False)
     async def token_refresh(request: Request):
         return await user_compat_token_refresh(request)
 
-    @app.get("/auth/token-verify")
-    @app.get("/user-service/auth/token-verify")
-    @app.get("/auth/verify")
-    @app.get("/user-service/auth/verify")
-    @app.get("/sessions/verify")
-    @app.get("/user-service/sessions/verify")
+    @app.get("/user-service/v1/auth/token-verify")
+    @app.get("/user-service/v1/auth/verify")
+    @app.get("/user-service/v1/sessions/verify")
+    @app.get("/auth/token-verify", include_in_schema=False)
+    @app.get("/user-service/auth/token-verify", include_in_schema=False)
+    @app.get("/auth/verify", include_in_schema=False)
+    @app.get("/user-service/auth/verify", include_in_schema=False)
+    @app.get("/sessions/verify", include_in_schema=False)
+    @app.get("/user-service/sessions/verify", include_in_schema=False)
     async def token_verify(request: Request, token: str | None = None):
         return await user_compat_token_verify(request, token=token)
 
-    @app.post("/ws/tickets")
-    @app.post("/user-service/ws/tickets")
+    @app.post("/user-service/v1/ws/tickets")
+    @app.post("/user-service/ws/tickets", include_in_schema=False)
+    @app.post("/ws/tickets", include_in_schema=False)
     async def ws_tickets(request: Request):
         return await user_compat_ws_tickets(request)
 
-    @app.get("/ws/tickets/verify")
-    @app.get("/user-service/ws/tickets/verify")
-    @app.get("/auth/ws-ticket/verify")
-    @app.get("/user-service/auth/ws-ticket/verify")
+    @app.get("/user-service/v1/ws/tickets/verify")
+    @app.get("/user-service/v1/auth/ws-ticket/verify")
+    @app.get("/ws/tickets/verify", include_in_schema=False)
+    @app.get("/user-service/ws/tickets/verify", include_in_schema=False)
+    @app.get("/auth/ws-ticket/verify", include_in_schema=False)
+    @app.get("/user-service/auth/ws-ticket/verify", include_in_schema=False)
     async def ws_ticket_verify(request: Request, ticket: str | None = None, token: str | None = None):
         return await user_compat_ws_ticket_verify(request, ticket=ticket, token=token)
 
@@ -309,7 +320,22 @@ def mount_routes(app: FastAPI) -> None:
             {
                 "jsonrpc": "2.0",
                 "method": "sync",
-                "params": {"owner_did": did, "reason": "connected", "source": "awiki-open-server"},
+                "params": {
+                    "owner_did": did,
+                    "reason": "connected",
+                    "source": "awiki-open-server",
+                    "meta": {
+                        "profile": "anp.sync.local.v1",
+                        "security_profile": "transport-protected",
+                        "sender_did": did,
+                    },
+                    "body": {
+                        "owner_did": did,
+                        "reason": "connected",
+                        "source": "awiki-open-server",
+                        "recovery": "call sync.delta and sync.thread_after",
+                    },
+                },
             }
         )
         try:
@@ -423,7 +449,7 @@ def mount_routes(app: FastAPI) -> None:
                     "type": "ANPMessageService",
                     "serviceEndpoint": settings.anp_service_endpoint,
                     "serviceDid": settings.service_did,
-                    "profiles": ["anp.core.binding.v1", "anp.direct.base.v1", "anp.group.base.v1", "anp.attachment.v1"],
+                    "profiles": list(STANDARD_PROFILES),
                     "securityProfiles": ["transport-protected"],
                     "authSchemes": ["bearer", "didwba"],
                 }

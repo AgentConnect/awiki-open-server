@@ -26,7 +26,19 @@ async def test_custom_anp_public_rpc_path_matches_did_document(tmp_path):
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         document = (await client.get("/.well-known/did.json")).json()
-        custom_caps = await rpc(client, "/public/anp/rpc", "anp.get_capabilities")
+        custom_caps = await rpc(
+            client,
+            "/public/anp/rpc",
+            "anp.get_capabilities",
+            {
+                "meta": {
+                    "profile": "anp.core.binding.v1",
+                    "security_profile": "transport-protected",
+                    "operation_id": "op-custom-capabilities",
+                },
+                "body": {},
+            },
+        )
         old_caps = await client.post(
             "/anp-im/rpc",
             json={"jsonrpc": "2.0", "method": "anp.get_capabilities", "params": {}, "id": "old"},

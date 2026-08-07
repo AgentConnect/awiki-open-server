@@ -24,7 +24,7 @@ python3.11 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
 ```
 
-The dependency set pins ANP Python SDK `anp==0.8.8`; the adapter fails fast on another version. In a controlled development environment only, a sibling checkout may be used explicitly:
+The dependency set pins ANP Python SDK `anp==0.9.2`; the adapter fails fast on another version. In a controlled development environment only, a sibling checkout may be used explicitly:
 
 ```bash
 PYTHONPATH=../anp/anp:src \
@@ -104,23 +104,35 @@ Use an isolated CLI workspace:
 export AWIKI_CLI_WORKSPACE_HOME_DIR=/tmp/awiki-cli-open-server-workspace
 
 awiki-cli tenant setup local-community \
-  --backend-base-url http://127.0.0.1:8765 \
-  --did-host localhost
+  --backend-base-url http://127.0.0.1.nip.io:8765 \
+  --did-host 127.0.0.1.nip.io
 
 awiki-cli init
 ```
 
-The Rust CLI registration shape may still require `--phone` or `--email`; Open Server does not send real SMS/email or persist production contact-verification state by default.
+The Rust CLI registration shape may still require `--phone` or `--email`; Open Server does not send real SMS/email or persist production contact-verification state by default. `localhost` is not a valid DID host for current CLI/WNS validation. Use `127.0.0.1.nip.io` only for loopback testing and replace it with the deployment's real domain.
 
-Repeatable CLI gate:
+First run the clean-workspace connection-and-write gate. It verifies tenant configuration, two registrations through canonical User Service v1, and a plaintext Direct write, while recording CLI build metadata and the artifact SHA-256:
 
 ```bash
-PYTHONPATH=src \
+PYTHONPATH=../anp/anp:src \
+.venv/bin/python scripts/awiki_open_cli.py smoke-rust-cli-connect \
+  --awiki-cli-bin /path/to/pinned/awiki-cli \
+  --data-root /tmp/awiki-open-server-rust-cli-connect \
+  --clean
+```
+
+Then run the complete user-journey gate:
+
+```bash
+PYTHONPATH=../anp/anp:src \
 .venv/bin/python scripts/awiki_open_cli.py smoke-rust-cli-local \
   --awiki-cli-bin /path/to/awiki-cli \
   --data-root /tmp/awiki-open-server-rust-cli-local \
   --clean
 ```
+
+As verified on 2026-08-07, `awiki-cli-rs2` `release/0714` commit `3200847d` passes the connection gate, and a clean build of the same source passes the complete local journey gate. Inbox/History uses `anp.sync.local.v2` in a deliberately limited mode: one DID, exactly one registered device, one client instance, tail-only bootstrap from the retained event stream, delta pull, batch hydration, and thread catch-up. Open Server rejects a second device/client instance and does not implement device sharing, snapshot/compact recovery, or multi-device cursor convergence. Record the CLI commit, binary digest, server commit, and exact gate used.
 
 ## 9. Important development switches
 

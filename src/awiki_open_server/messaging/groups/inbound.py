@@ -94,7 +94,7 @@ def _record_inbound(
     event_seq: int,
     body: dict[str, Any],
 ) -> bool:
-    source_service_did = runtime._source_service_did(dict(request.headers))
+    source_service_did = runtime._verified_peer_service_did(request)
     if not source_service_did:
         raise Unauthorized("missing_source_service_did")
     digest = build_content_digest(jcs.canonicalize(body))

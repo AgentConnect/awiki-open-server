@@ -33,7 +33,7 @@ python3.11 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
 ```
 
-当前依赖固定 ANP Python SDK `anp==0.8.8`。Adapter 会在加载到其他版本时 fail fast。
+当前依赖固定 ANP Python SDK `anp==0.9.2`。Adapter 会在加载到其他版本时 fail fast。
 
 如本地环境暂时无法正确安装 ANP package，仓库开发验证可以显式使用 sibling SDK checkout：
 
@@ -128,23 +128,44 @@ PYTHONPATH=src .venv/bin/python -m pytest tests -q
 export AWIKI_CLI_WORKSPACE_HOME_DIR=/tmp/awiki-cli-open-server-workspace
 
 awiki-cli tenant setup local-community \
-  --backend-base-url http://127.0.0.1:8765 \
-  --did-host localhost
+  --backend-base-url http://127.0.0.1.nip.io:8765 \
+  --did-host 127.0.0.1.nip.io
 
 awiki-cli init
 ```
 
 当前 Rust CLI 注册命令可能仍要求 `--phone` 或 `--email` 以保留命令形状；Open Server 默认不会发送真实 SMS/Email，也不会持久化生产联系验证状态。
 
-仓库内重复 Gate：
+`localhost` 不是当前 CLI/WNS 接受的 DID host。本机验证应使用解析到 loopback 的
+`127.0.0.1.nip.io`；部署时替换为实际服务域名。
+
+先运行“连接与写入”Gate。它使用两个全新 CLI workspace，验证 canonical User Service v1
+注册和明文 Direct 写入，并记录 CLI build 信息及 artifact SHA-256：
 
 ```bash
-PYTHONPATH=src \
+PYTHONPATH=../anp/anp:src \
+.venv/bin/python scripts/awiki_open_cli.py smoke-rust-cli-connect \
+  --awiki-cli-bin /path/to/pinned/awiki-cli \
+  --data-root /tmp/awiki-open-server-rust-cli-connect \
+  --clean
+```
+
+完整用户旅程 Gate：
+
+```bash
+PYTHONPATH=../anp/anp:src \
 .venv/bin/python scripts/awiki_open_cli.py smoke-rust-cli-local \
   --awiki-cli-bin /path/to/awiki-cli \
   --data-root /tmp/awiki-open-server-rust-cli-local \
   --clean
 ```
+
+截至 2026-08-07，`awiki-cli-rs2` `release/0714` 提交 `3200847d` 已通过连接 Gate；同一源码的
+干净构建也已通过当前仓库本地用户旅程 Gate。`msg inbox/history` 使用受限的
+`anp.sync.local.v2`：一个 DID、恰好一个注册设备、一个 client instance，采用 tail-only
+bootstrap（从保留事件流起点拉取）、delta、batch hydration 和 thread catch-up。Open Server
+会拒绝第二个设备/client instance，不支持设备间共享、snapshot/compact recovery 或多设备游标
+收敛。验证记录必须包含 CLI commit、二进制摘要、Open Server commit 和实际执行的 Gate。
 
 ## 9. 重要开发开关
 

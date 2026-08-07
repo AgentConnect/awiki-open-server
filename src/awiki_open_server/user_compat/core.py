@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import base64
 import hashlib
 import json
 import re
@@ -9,6 +10,7 @@ from typing import Any
 from fastapi import Request
 
 from awiki_open_server.app.settings import Settings
+from awiki_open_server.protocol.registry import STANDARD_PROFILES
 from awiki_open_server.service_identity import verify_did_document_data_integrity_proof
 from awiki_open_server.shared.errors import Conflict, InvalidParams, NotFound, NotSupported, Unauthorized
 from awiki_open_server.shared.ids import new_id, now_iso
@@ -37,6 +39,54 @@ REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 3600
 
 def _future_iso(seconds: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+
+
+def _b64u_json(value: dict[str, Any]) -> str:
+    raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def _device_access_token(did: str, user_id: str, document: dict[str, Any]) -> str | None:
+    manifest = document.get("deviceManifest")
+    devices = manifest.get("devices") if isinstance(manifest, dict) else None
+    device = devices[0] if isinstance(devices, list) and devices and isinstance(devices[0], dict) else None
+    if device is None:
+        return None
+    device_id = device.get("device_id")
+    key_id = device.get("signing_key_id")
+    if not isinstance(device_id, str) or not device_id or not isinstance(key_id, str) or not key_id:
+        return None
+    now = int(datetime.now(timezone.utc).timestamp())
+    claims = {
+        "iss": "user-service",
+        "aud": ["awiki-user-service", "awiki-message-service"],
+        "sub": did,
+        "type": "access",
+        "purpose": "awiki.device.access.v1",
+        "did": did,
+        "user_id": user_id,
+        "device_id": device_id,
+        "key_id": key_id,
+        "auth_generation": 1,
+        "scopes": ["device:manage", "device:read", "message:connect"],
+        "iat": now,
+        "nbf": now,
+        "exp": now + ACCESS_TOKEN_TTL_SECONDS,
+        "jti": new_id("jti"),
+    }
+    return f"{_b64u_json({'alg': 'none', 'typ': 'JWT'})}.{_b64u_json(claims)}.open-server"
+
+
+def _validate_single_device_manifest(document: dict[str, Any]) -> None:
+    manifest = document.get("deviceManifest")
+    if manifest is None:
+        return
+    devices = manifest.get("devices") if isinstance(manifest, dict) else None
+    if not isinstance(devices, list) or len(devices) != 1 or not isinstance(devices[0], dict):
+        raise NotSupported(
+            "multiple_devices_not_supported",
+            data={"max_devices_per_did": 1, "sync_mode": "single_device_pull_only"},
+        )
 
 
 def _is_past(value: Any) -> bool:
@@ -162,12 +212,7 @@ def did_document(settings: Settings, did: str, handle: str | None = None) -> dic
                 "type": "ANPMessageService",
                 "serviceEndpoint": settings.anp_service_endpoint,
                 "serviceDid": settings.service_did,
-                "profiles": [
-                    "anp.core.binding.v1",
-                    "anp.direct.base.v1",
-                    "anp.group.base.v1",
-                    "anp.attachment.v1",
-                ],
+                "profiles": list(STANDARD_PROFILES),
                 "securityProfiles": ["transport-protected"],
                 "authSchemes": ["bearer", "didwba"],
             }
@@ -383,6 +428,9 @@ def register(params: dict[str, Any], request: Request) -> dict[str, Any]:
     refresh_expires_at = _future_iso(REFRESH_TOKEN_TTL_SECONDS)
     doc = _ensure_anp_message_service(uploaded_doc or did_document(settings, did, stored_handle), settings, did)
     doc["id"] = did
+    _validate_single_device_manifest(doc)
+    user_id = f"user-{hashlib.sha256(did.encode()).hexdigest()[:24]}"
+    token = _device_access_token(did, user_id, doc) or token
     with get_store(request).connect() as conn:
         existing_handle = conn.execute("SELECT did FROM users WHERE handle = ?", (stored_handle,)).fetchone()
         if existing_handle:
@@ -405,7 +453,7 @@ def register(params: dict[str, Any], request: Request) -> dict[str, Any]:
             "INSERT INTO did_documents(did, document_json, updated_at, status, revoked_at) VALUES (?, ?, ?, 'active', NULL)",
             (did, _json(doc), now_iso()),
         )
-    return {
+    result = {
         "did": did,
         "user_id": did,
         "message": "Registration successful",
@@ -421,6 +469,19 @@ def register(params: dict[str, Any], request: Request) -> dict[str, Any]:
         "refresh_expires_at": refresh_expires_at,
         "document": doc,
     }
+    if request.url.path == "/user-service/v1/did-auth/rpc" and uploaded_doc and uploaded_doc.get("deviceManifest"):
+        return {
+            "state": "registered",
+            "did": did,
+            "user_id": user_id,
+            "message": "Registration successful",
+            "access_token": token,
+            "handle": local_handle,
+            "domain": settings.did_domain,
+            "full_handle": full_handle,
+            "binding_generation": "1",
+        }
+    return result
 
 
 def verify(_: dict[str, Any], request: Request) -> dict[str, Any]:
@@ -447,6 +508,7 @@ def update_document(params: dict[str, Any], request: Request) -> dict[str, Any]:
     if document.get("id") is None:
         document["id"] = did
     document = _ensure_anp_message_service(document, settings, did)
+    _validate_single_device_manifest(document)
     with get_store(request).connect() as conn:
         conn.execute(
             """
@@ -867,7 +929,9 @@ def handle_lookup(params: dict[str, Any], request: Request) -> dict[str, Any]:
     local, domain, _, full = _split_handle(profile["handle"], settings.did_domain)
     return {
         "did": profile["did"],
-        "user_id": profile["did"],
+        # The latest clients treat the Handle authority subject as the stable
+        # account identifier and explicitly reject a credential DID fallback.
+        "user_id": f"user-{hashlib.sha256(profile['did'].encode()).hexdigest()[:24]}",
         "handle": local,
         "domain": domain,
         "full_handle": full,

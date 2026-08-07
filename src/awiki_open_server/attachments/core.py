@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
 from pathlib import Path
@@ -60,6 +61,17 @@ def _parse_expected_sha256(value: Any) -> str | None:
         alg = str(value.get("alg") or "sha-256").strip().lower()
         if alg not in {"sha-256", "sha256"}:
             raise InvalidParams("attachment_digest_alg_not_supported", data={"alg": alg})
+        encoded = value.get("value_b64u")
+        if encoded is not None:
+            if not isinstance(encoded, str) or not encoded:
+                raise InvalidParams("attachment_expected_digest_invalid")
+            try:
+                decoded = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+            except (ValueError, TypeError) as exc:
+                raise InvalidParams("attachment_expected_digest_invalid") from exc
+            if len(decoded) != 32:
+                raise InvalidParams("attachment_expected_digest_invalid")
+            return decoded.hex()
         raw = value.get("value_hex") or value.get("sha256") or value.get("value")
     else:
         raw = value
@@ -156,7 +168,10 @@ def attachment_create_slot(params: dict[str, Any], request: Request) -> dict[str
     if expected_size is not None:
         result["expected_size"] = expected_size
     if expected_sha256 is not None:
-        result["expected_digest"] = {"alg": "sha-256", "value_hex": expected_sha256}
+        digest = {"alg": "sha-256", "value_b64u": base64.urlsafe_b64encode(bytes.fromhex(expected_sha256)).rstrip(b"=").decode()}
+        if not isinstance(params.get("_anp_body"), dict):
+            digest["value_hex"] = expected_sha256
+        result["expected_digest"] = digest
     if expected_content_type is not None:
         result["content_type"] = expected_content_type
     return result
@@ -183,6 +198,10 @@ async def upload_slot(slot_id: str, token: str, data: bytes, request: Request) -
 
 def attachment_commit(params: dict[str, Any], request: Request) -> dict[str, Any]:
     owner = current_did(request)
+    canonical = isinstance(params.get("_anp_body"), dict)
+    object_encryption_mode = params.get("object_encryption_mode", "none")
+    if object_encryption_mode != "none":
+        raise NotSupported("anp.attachment.encryption_policy_violation")
     slot_id = params.get("slot_id")
     commit_token = params.get("commit_token")
     if not slot_id or not commit_token:
@@ -210,6 +229,16 @@ def attachment_commit(params: dict[str, Any], request: Request) -> dict[str, Any
         digest = hashlib.sha256(data).hexdigest()
         if row["expected_sha256"] and str(row["expected_sha256"]).lower() != digest:
             raise InvalidParams("attachment_digest_mismatch", data={"expected": row["expected_sha256"], "actual": digest})
+        if canonical:
+            attachment_id_param = params.get("attachment_id")
+            if not isinstance(attachment_id_param, str) or attachment_id_param != row["attachment_id"]:
+                raise InvalidParams("attachment_id_mismatch")
+            actual_size = _parse_expected_size(params.get("actual_size", params.get("size")))
+            if actual_size is None or actual_size != len(data):
+                raise InvalidParams("attachment_size_mismatch", data={"expected": len(data), "actual": actual_size})
+            actual_digest = _parse_expected_sha256(params.get("actual_digest", params.get("digest")))
+            if actual_digest is None or actual_digest != digest:
+                raise InvalidParams("attachment_digest_mismatch", data={"expected": digest, "actual": actual_digest})
         content_type = _normalize_mime_type(params.get("content_type") or row["expected_content_type"] or "application/octet-stream")
         _ensure_mime_allowed(settings, content_type)
         if row["expected_content_type"] and content_type != row["expected_content_type"]:
@@ -237,7 +266,11 @@ def attachment_commit(params: dict[str, Any], request: Request) -> dict[str, Any
         "committed_at": committed_at,
         "size": len(data),
         "sha256": digest,
-        "digest": {"alg": "sha-256", "value_hex": digest},
+        "digest": {
+            "alg": "sha-256",
+            "value_b64u": base64.urlsafe_b64encode(bytes.fromhex(digest)).rstrip(b"=").decode(),
+            **({} if canonical else {"value_hex": digest}),
+        },
         "content_type": content_type,
     }
 
@@ -456,8 +489,6 @@ def attachment_ticket(params: dict[str, Any], request: Request) -> dict[str, Any
     anp_ticket = _is_anp_attachment_ticket_request(params)
     if anp_ticket:
         _validate_attachment_ticket_meta(params, settings)
-        if public_rpc:
-            _verify_peer_request_signature(request, settings)
     authenticated = current_did(request, required=not public_rpc)
     requester = params.get("requester_did") or authenticated
     if not requester:
@@ -471,6 +502,11 @@ def attachment_ticket(params: dict[str, Any], request: Request) -> dict[str, Any
         else:
             binding = _ticket_direct_binding(params)
         requester = binding["requester_did"]
+        if public_rpc:
+            # The HTTP-hop principal is the requester's Home service. The
+            # authoritative message row below independently establishes the
+            # original sender and attachment grant; caller input cannot replace it.
+            _verify_peer_request_signature(request, settings, caller_anchor=requester)
     ticket = new_id("ticket")
     expires_at = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()
     with get_store(request).connect() as conn:

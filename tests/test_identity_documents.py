@@ -73,6 +73,9 @@ async def test_user_service_identity_compat_path_accepts_cli_did_document(client
 
     by_did = await rpc(client, "/user-service/handle/rpc", "lookup", {"did": did})
     assert by_did["result"]["handle"] == "cli-alice"
+    assert by_did["result"]["user_id"].startswith("user-")
+    assert not by_did["result"]["user_id"].startswith("did:")
+    assert by_handle["result"]["user_id"] == by_did["result"]["user_id"]
 
     otp = await rpc(client, "/handle/rpc", "send_otp", {"phone": "13800138000"})
     assert otp["error"]["message"] == "contact_verification_not_enabled"

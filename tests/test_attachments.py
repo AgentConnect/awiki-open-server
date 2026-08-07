@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 
 import httpx
@@ -12,7 +13,71 @@ from awiki_open_server.service_identity import (
     generate_ed25519_private_key_pem,
 )
 from tests.conftest import rpc
-from tests.helpers import register
+from tests.helpers import origin_proof, register, register_with_key
+
+
+@pytest.mark.asyncio
+async def test_attachment_canonical_b64u_digest_and_commit_shape(client):
+    did, token = await register(client, "att-canonical")
+    data = b"canonical attachment bytes"
+    digest_bytes = hashlib.sha256(data).digest()
+    digest_b64u = base64.urlsafe_b64encode(digest_bytes).rstrip(b"=").decode()
+    target = {"kind": "service", "did": "did:wba:testserver"}
+    slot = await rpc(
+        client,
+        "/im/rpc",
+        "attachment.create_slot",
+        {
+            "meta": {
+                "profile": "anp.attachment.v1",
+                "security_profile": "transport-protected",
+                "sender_did": did,
+                "target": target,
+                "operation_id": "op-att-slot-canonical",
+            },
+            "body": {
+                "attachment_id": "att-canonical",
+                "expected_size": str(len(data)),
+                "expected_digest": {"alg": "sha-256", "value_b64u": digest_b64u},
+                "mime_type": "application/octet-stream",
+                "intended_message_security_profile": "transport-protected",
+                "intended_target": {"kind": "agent", "did": did},
+                "object_encryption_mode": "none",
+            },
+        },
+        token=token,
+    )
+    slot_result = slot["result"]
+    assert slot_result["expected_digest"] == {"alg": "sha-256", "value_b64u": digest_b64u}
+    await client.put(
+        f"/objects/upload/{slot_result['slot_id']}",
+        headers=slot_result["upload_headers"],
+        content=data,
+    )
+    committed = await rpc(
+        client,
+        "/im/rpc",
+        "attachment.commit_object",
+        {
+            "meta": {
+                "profile": "anp.attachment.v1",
+                "security_profile": "transport-protected",
+                "sender_did": did,
+                "target": target,
+                "operation_id": "op-att-commit-canonical",
+            },
+            "body": {
+                "attachment_id": "att-canonical",
+                "slot_id": slot_result["slot_id"],
+                "commit_token": slot_result["commit_token"],
+                "actual_size": str(len(data)),
+                "actual_digest": {"alg": "sha-256", "value_b64u": digest_b64u},
+                "object_encryption_mode": "none",
+            },
+        },
+        token=token,
+    )
+    assert committed["result"]["digest"] == {"alg": "sha-256", "value_b64u": digest_b64u}
 
 @pytest.mark.asyncio
 async def test_attachment_roundtrip(client):
@@ -65,7 +130,8 @@ async def test_attachment_roundtrip(client):
     assert denied["error"]["message"] == "object_ticket_not_allowed"
 
     public_denied = await rpc(client, "/anp-im/rpc", "attachment.get_download_ticket", {"object_id": object_id})
-    assert public_denied["error"]["message"] == "missing_requester_did"
+    assert public_denied["error"]["code"] == 1003
+    assert public_denied["error"]["data"]["anp_code"] == "anp.invalid_params_shape"
 
 
 @pytest.mark.asyncio
@@ -242,7 +308,7 @@ async def test_attachment_expiry_quota_and_cleanup(tmp_path):
 
 @pytest.mark.asyncio
 async def test_attachment_download_ticket_accepts_anp_body_shape(client):
-    sender_did, sender_token = await register(client, "att-sender")
+    sender_did, sender_token, sender_key, _ = await register_with_key(client, "att-sender")
     recipient_did, recipient_token = await register(client, "att-recipient")
     outsider_did, outsider_token = await register(client, "att-outsider")
     group_did = "did:wba:testserver:groups:open"
@@ -295,7 +361,20 @@ async def test_attachment_download_ticket_accepts_anp_body_shape(client):
             "primary_attachment_id": "att-direct",
         }
     }
-    sent = await rpc(client, "/im/rpc", "direct.send", {"meta": direct_meta, "body": direct_body}, token=sender_token)
+    sent = await rpc(
+        client,
+        "/im/rpc",
+        "direct.send",
+        {
+            "meta": direct_meta,
+            "auth": {
+                "scheme": "anp-rfc9421-origin-proof-v1",
+                "origin_proof": origin_proof(direct_meta, direct_body, sender_key),
+            },
+            "body": direct_body,
+        },
+        token=sender_token,
+    )
     assert sent["result"]["message_id"] == "msg-att-direct"
 
     ticket_meta = {

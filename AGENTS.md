@@ -12,7 +12,7 @@ Install runtime and test dependencies:
 python3 -m pip install -e '.[dev]'
 ```
 
-The project pins ANP Python SDK `anp==0.8.8`; the protocol adapter fails fast when another version is loaded. In this workspace, use `PYTHONPATH=../anp/anp:src` for verification if the active environment still has an older installed `anp` package.
+The project pins ANP Python SDK `anp==0.9.2`; the protocol adapter fails fast when another version is loaded. In this workspace, use `PYTHONPATH=../anp/anp:src` for verification if the active environment still has an older installed `anp` package.
 
 Run the full local suite:
 

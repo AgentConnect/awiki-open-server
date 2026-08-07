@@ -14,6 +14,7 @@ from awiki_open_server.messaging.groups.delivery import (
     ensure_outbox_capacity,
 )
 from awiki_open_server.messaging.groups.identity import (
+    VerifiedHandleBinding,
     binding_generation_is_newer,
     generate_group_identity,
     persist_group_private_key,
@@ -29,7 +30,7 @@ from awiki_open_server.service_identity import validate_origin_proof_structure
 from awiki_open_server.shared import runtime
 from awiki_open_server.shared.errors import Conflict, InvalidParams, NotFound, Unauthorized
 from awiki_open_server.shared.ids import new_id, now_iso
-from awiki_open_server.user_compat.core import current_did, get_settings, get_store
+from awiki_open_server.user_compat.core import _split_handle, current_did, get_settings, get_store
 
 
 GROUP_PROFILE = "anp.group.base.v1"
@@ -98,6 +99,27 @@ def _home_service_did(request: Request, did: str) -> str:
         return settings.service_did
     service = runtime._discover_anp_service(did, settings)
     return _require_string(service.get("serviceDid"), "anp_service_did_required")
+
+
+def _resolve_handle_binding(request: Request, handle: str) -> VerifiedHandleBinding:
+    settings = get_settings(request)
+    _, _, stored_handle, full_handle = _split_handle(handle, settings.did_domain)
+    with get_store(request).connect() as conn:
+        row = conn.execute(
+            """
+            SELECT p.did, u.handle_binding_generation
+            FROM profiles p JOIN users u ON u.did = p.did
+            WHERE p.handle = ? AND u.revoked_at IS NULL
+            """,
+            (stored_handle,),
+        ).fetchone()
+    if row:
+        return VerifiedHandleBinding(
+            handle=full_handle,
+            did=str(row["did"]),
+            binding_generation=str(row["handle_binding_generation"]),
+        )
+    return resolve_handle_binding(handle)
 
 
 def _request_context(
@@ -381,7 +403,7 @@ def hosted_group_create(params: dict[str, Any], request: Request) -> dict[str, A
     if not isinstance(initial_members, list):
         raise InvalidParams("group.initial_members_invalid")
     creator_handle = context.body.get("creator_handle")
-    creator_binding = resolve_handle_binding(creator_handle) if isinstance(creator_handle, str) else None
+    creator_binding = _resolve_handle_binding(request, creator_handle) if isinstance(creator_handle, str) else None
     if creator_handle is not None and creator_binding is None:
         raise InvalidParams("group.creator_handle_invalid")
     if creator_binding is not None and creator_binding.did != context.sender_did:
@@ -396,7 +418,7 @@ def hosted_group_create(params: dict[str, Any], request: Request) -> dict[str, A
         member_handle = item.get("member_handle")
         if (member_did is None) == (member_handle is None):
             raise InvalidParams("group.member_identifier_ambiguous")
-        binding = resolve_handle_binding(member_handle) if isinstance(member_handle, str) else None
+        binding = _resolve_handle_binding(request, member_handle) if isinstance(member_handle, str) else None
         if member_handle is not None and binding is None:
             raise InvalidParams("group.member_handle_invalid")
         resolved_did = binding.did if binding is not None else _require_string(member_did, "group.member_did_required")
@@ -802,7 +824,7 @@ def _membership_mutation(
             if policy["admission_mode"] != "open-join":
                 raise Unauthorized("group.policy_violation")
             requested_handle = context.body.get("member_handle")
-            binding = resolve_handle_binding(requested_handle) if isinstance(requested_handle, str) else None
+            binding = _resolve_handle_binding(request, requested_handle) if isinstance(requested_handle, str) else None
             if requested_handle is not None and binding is None:
                 raise InvalidParams("group.member_handle_invalid")
             if binding is not None and binding.did != context.sender_did:
@@ -817,7 +839,7 @@ def _membership_mutation(
             member_handle = context.body.get("member_handle")
             if (member_did is None) == (member_handle is None):
                 raise InvalidParams("group.member_identifier_ambiguous")
-            binding = resolve_handle_binding(member_handle) if isinstance(member_handle, str) else None
+            binding = _resolve_handle_binding(request, member_handle) if isinstance(member_handle, str) else None
             if member_handle is not None and binding is None:
                 raise InvalidParams("group.member_handle_invalid")
             target_did = binding.did if binding is not None else _require_string(member_did, "group.member_did_required")
@@ -1062,7 +1084,7 @@ def hosted_group_rebind_member(params: dict[str, Any], request: Request) -> dict
     )
     if context.sender_did != new_did:
         raise Unauthorized("group.rebind_sender_mismatch")
-    binding = resolve_handle_binding(member_handle)
+    binding = _resolve_handle_binding(request, member_handle)
     if binding.did != new_did:
         raise Unauthorized("group.handle_did_mismatch")
     if binding.binding_generation != requested_generation:

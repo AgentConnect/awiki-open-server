@@ -2,13 +2,13 @@
 
 [English](client-compatibility.md) | [简体中文](client-compatibility.zh-CN.md)
 
-最后整理日期：2026-07-16。兼容性应以具体客户端 version/commit、服务端 commit 和验证日期记录。
+最后整理日期：2026-08-07。兼容性应以具体客户端 version/commit、服务端 commit 和验证日期记录。
 
 ## 1. 总览
 
 | 客户端/对端 | 当前定位 | 已知能力 | 关键限制 |
 | --- | --- | --- | --- |
-| `awiki-cli` | 主要兼容验证客户端 | 本地注册、Direct、Community Group v1 完整生命周期、People、Site、Attachment | 无 E2EE 或大群/复杂治理；注册 contact 参数只是兼容形状 |
+| `awiki-cli` | 主要兼容验证客户端 | release/0714 `3200847d` 已验证 tenant、canonical v1 注册、明文 Direct Inbox/History 和本地 Community Group 旅程 | Sync v2 仅单设备拉取；无设备共享、第二设备、snapshot recovery 或 E2EE；Attachment/realtime 仍是独立 Gate |
 | AWiki Me | 基础产品兼容目标 | 自定义租户下的身份/消息/附件需持续验证 | Agent realm allowlist；无 E2EE；不能宣称所有 App 功能兼容 |
 | 其他 ANP Peer | 选定 public methods | capability、Direct、部分 Group/Attachment | 不是完整 federation；需要 origin proof 与 service signature |
 | 旧 AWiki Client | compatibility routes | User/Message Service 风格路由 | shim 不等于生产身份提供方或完整托管平台 |
@@ -23,6 +23,31 @@
 - People follow/status/following/followers；
 - Site root/pages；
 - Attachment（按当前 smoke 与服务实现）。
+
+这里的“目标”不等于所有版本天然兼容。2026-08-07 使用 `awiki-cli-rs2` `release/0714`
+`3200847d` 的干净构建实测：tenant 配置、`/user-service/v1/did-auth/rpc` 注册、明文 Direct
+send/Inbox/History、当前本地 Group create/get/list/add/update/join/send/messages/leave/remove、
+People 和 Site 均通过；独立 Group members inventory、Attachment、realtime/restart 仍按发布矩阵
+单独验证。这里的 v2 是 wire
+contract 版本，不是多设备能力声明：Open Server 将一个 DID 固定到恰好一个设备和一个 client
+instance，只支持 tail-only bootstrap、delta、`message.get_batch` 与 thread catch-up；第二设备或
+第二 client instance 返回 `not_supported`，也不发布 snapshot recovery 或设备间状态共享。
+
+可重复的分层验证：
+
+```bash
+# 连接 Gate：配置、注册并执行明文 Direct 写入
+PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-rust-cli-connect \
+  --awiki-cli-bin /path/to/pinned/awiki-cli --clean
+
+# 当前仓库本地用户旅程 Gate，包括单设备 v2 Inbox/History
+PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-rust-cli-local \
+  --awiki-cli-bin /path/to/pinned/awiki-cli --clean
+```
+
+报告必须区分 `connection-and-write passed`、`single-device sync v2 passed` 和
+`full local user journey passed`，并保存 CLI commit、`awiki-cli version`、artifact SHA-256、
+Open Server commit 与日期。
 
 连接示例：
 

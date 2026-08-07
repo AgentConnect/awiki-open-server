@@ -6,6 +6,7 @@ import threading
 
 from fastapi import FastAPI
 
+from awiki_open_server.app.api_contract import ApiContractMetrics, ApiContractMiddleware
 from awiki_open_server.app.realtime import RealtimeHub
 from awiki_open_server.app.settings import Settings, load_settings
 from awiki_open_server.service_identity import service_identity_from_settings
@@ -39,6 +40,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.group_outbox_lock = threading.Lock()
     app.state.group_outbox_last_heartbeat = None
     app.state.group_outbox_last_result = None
+    app.state.api_contract_metrics = ApiContractMetrics()
     app.state.service_identity = service_identity_from_settings(
         service_did=settings.service_did,
         endpoint=settings.anp_service_endpoint,
@@ -49,6 +51,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from awiki_open_server.app.routes import mount_routes
 
     mount_routes(app)
+    app.add_middleware(
+        ApiContractMiddleware,
+        metrics=app.state.api_contract_metrics,
+        local_message_paths={settings.im_rpc_path},
+    )
 
     return app
 

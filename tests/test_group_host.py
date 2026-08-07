@@ -23,7 +23,13 @@ from awiki_open_server.service_identity import (
 )
 from awiki_open_server.shared.errors import InvalidParams
 from tests.conftest import rpc
-from tests.helpers import did_keypair_document, origin_proof, register_with_key, sign_did_document
+from tests.helpers import (
+    did_keypair_document,
+    origin_proof,
+    register_with_key,
+    runtime_capabilities,
+    sign_did_document,
+)
 
 
 def _group_envelope(
@@ -468,11 +474,12 @@ async def test_group_get_info_enforces_discoverability_and_private_field_visibil
                         "anp_version": "1.0",
                         "profile": "anp.group.base.v1",
                         "security_profile": "transport-protected",
+                        "operation_id": f"get-info-op-{group_did[-8:]}",
                         "target": {"kind": "group", "did": group_did},
                     },
                     "body": body,
                 },
-                "id": f"get-{discoverability}",
+                "id": f"get-{group_did[-8:]}",
             },
         )
 
@@ -775,6 +782,11 @@ async def test_public_group_send_requires_peer_service_bound_to_sender_did(tmp_p
         return documents[url]
 
     monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
+    monkeypatch.setattr(
+        runtime,
+        "_http_post_json",
+        lambda *_args, **_kwargs: runtime_capabilities("did:wba:remote.example"),
+    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as local_client:
         owner_did, owner_token, owner_key, _ = await register_with_key(local_client, "peer-owner")
@@ -838,7 +850,7 @@ async def test_public_group_send_requires_peer_service_bound_to_sender_did(tmp_p
             )
         )
         attacker_response = await local_client.post("/anp-im/rpc", content=raw_body, headers=attacker_headers)
-        assert attacker_response.json()["error"]["message"] == "source_service_did_caller_anchor_mismatch"
+        assert attacker_response.json()["error"]["message"] == "signature_service_did_caller_anchor_mismatch"
 
         peer_headers = {"Content-Type": "application/json", "x-anp-source-service-did": "did:wba:remote.example"}
         peer_headers.update(
@@ -884,11 +896,12 @@ async def test_public_group_send_requires_peer_service_bound_to_sender_did(tmp_p
             app.state.group_outbox_lock.release()
         assert overlapping == {"selected": 0, "delivered": 0, "retried": 0, "dead": 0}
 
-        monkeypatch.setattr(
-            runtime,
-            "_http_post_json",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("temporary peer outage")),
-        )
+        def unavailable_delivery(_url, payload, **_kwargs):
+            if payload.get("method") == "anp.get_capabilities":
+                return runtime_capabilities("did:wba:remote.example")
+            raise OSError("temporary peer outage")
+
+        monkeypatch.setattr(runtime, "_http_post_json", unavailable_delivery)
         first_drain = drain_group_outbox_once(app)
         assert first_drain == {"selected": 1, "delivered": 0, "retried": 1, "dead": 0}
         with app.state.store.connect() as conn:
@@ -913,6 +926,8 @@ async def test_public_group_send_requires_peer_service_bound_to_sender_did(tmp_p
         deliveries = []
 
         def accept_delivery(url, payload, *, headers=None, body_bytes=None):
+            if payload.get("method") == "anp.get_capabilities":
+                return runtime_capabilities("did:wba:remote.example")
             deliveries.append((url, payload, headers, body_bytes))
             return {}
 
@@ -990,6 +1005,12 @@ async def test_two_server_notifications_build_remote_member_projection(tmp_path,
         return documents[url]
 
     monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
+
+    def fake_capabilities(url: str, *_args, **_kwargs):
+        service_did = "did:wba:host.test" if ":18081/" in url else "did:wba:home.test"
+        return runtime_capabilities(service_did)
+
+    monkeypatch.setattr(runtime, "_http_post_json", fake_capabilities)
     host_transport = httpx.ASGITransport(app=host_app)
     home_transport = httpx.ASGITransport(app=home_app)
     async with (
@@ -1101,7 +1122,8 @@ async def test_two_server_notifications_build_remote_member_projection(tmp_path,
                 content=tampered_raw,
                 headers=tampered_headers,
             )
-            assert tampered_response.json()["error"]["message"] == expected_error
+            assert tampered_response.status_code == 204
+            assert tampered_response.content == b""
 
             raw_body = json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode()
             headers = {"Content-Type": "application/json", "x-anp-source-service-did": "did:wba:host.test"}
@@ -1134,7 +1156,9 @@ async def test_two_server_notifications_build_remote_member_projection(tmp_path,
                 content=request_raw,
                 headers=request_headers,
             )
-            assert request_response.json()["error"]["message"] == "group.notification_must_not_have_id"
+            request_error = request_response.json()["error"]
+            assert request_error["code"] == -32600
+            assert request_error["data"]["reason"] == "anp.notification_must_not_have_id"
 
         projected = await rpc(home_client, "/im/rpc", "group.get", {"group_did": group_did}, token=member_token)
         assert projected["result"]["group_profile"]["display_name"] == "Two Server Group"
@@ -1163,6 +1187,9 @@ async def test_two_server_notifications_build_remote_member_projection(tmp_path,
         refresh_requests = []
 
         def refresh_from_host(url, payload, *, headers=None, body_bytes=None):
+            if payload.get("method") == "anp.get_capabilities":
+                service_did = "did:wba:host.test" if ":18081/" in url else "did:wba:home.test"
+                return runtime_capabilities(service_did)
             refresh_requests.append((url, payload, headers, body_bytes))
             return host_snapshot
 
@@ -1232,6 +1259,8 @@ async def test_two_server_notifications_build_remote_member_projection(tmp_path,
         forwarded_payloads = []
 
         def forward_to_host(url, payload, *, headers=None, body_bytes=None):
+            if payload.get("method") == "anp.get_capabilities":
+                return runtime_capabilities("did:wba:host.test")
             forwarded_payloads.append((url, payload, headers, body_bytes))
             return host_response.json()
 
@@ -1251,7 +1280,13 @@ async def test_two_server_notifications_build_remote_member_projection(tmp_path,
 
         forged_response = copy.deepcopy(host_response.json())
         forged_response["result"]["group_receipt"]["proof"]["proofValue"] = "zInvalid"
-        monkeypatch.setattr(runtime, "_http_post_json", lambda *_args, **_kwargs: forged_response)
+
+        def return_forged(_url, payload, **_kwargs):
+            if payload.get("method") == "anp.get_capabilities":
+                return runtime_capabilities("did:wba:host.test")
+            return forged_response
+
+        monkeypatch.setattr(runtime, "_http_post_json", return_forged)
         forged = await rpc(
             home_client,
             "/im/rpc",
@@ -1261,10 +1296,7 @@ async def test_two_server_notifications_build_remote_member_projection(tmp_path,
         )
         assert forged["error"]["message"] == "group.invalid_group_receipt"
 
-        monkeypatch.setattr(
-            runtime,
-            "_http_post_json",
-            lambda *_args, **_kwargs: {
+        remote_not_member = {
                 "jsonrpc": "2.0",
                 "id": "op-home-to-host-send",
                 "error": {
@@ -1272,8 +1304,14 @@ async def test_two_server_notifications_build_remote_member_projection(tmp_path,
                     "message": "actor is not active in the target group",
                     "data": {"anp_code": "group.not_member"},
                 },
-            },
-        )
+            }
+
+        def return_not_member(_url, payload, **_kwargs):
+            if payload.get("method") == "anp.get_capabilities":
+                return runtime_capabilities("did:wba:host.test")
+            return remote_not_member
+
+        monkeypatch.setattr(runtime, "_http_post_json", return_not_member)
         rejected = await rpc(
             home_client,
             "/im/rpc",
@@ -1282,10 +1320,7 @@ async def test_two_server_notifications_build_remote_member_projection(tmp_path,
             token=member_token,
         )
         assert rejected["error"]["message"] == "group.not_member"
-        assert rejected["error"]["data"] == {
-            "remote_code": 3000,
-            "anp_code": "group.not_member",
-        }
+        assert rejected["error"]["data"] == {"remote_code": 3000, "anp_code": "group.not_member"}
 
 
 @pytest.mark.asyncio
@@ -1335,6 +1370,12 @@ async def test_two_server_open_join_routes_original_request_and_bootstraps_proje
         "http://127.0.0.1:18182/.well-known/did.json": home_app.state.service_identity.did_document,
     }
     monkeypatch.setattr(runtime, "_http_get_json", lambda url, **_kwargs: documents[url])
+
+    def fake_capabilities(url: str, *_args, **_kwargs):
+        service_did = "did:wba:join-host.test" if ":18181/" in url else "did:wba:join-home.test"
+        return runtime_capabilities(service_did)
+
+    monkeypatch.setattr(runtime, "_http_post_json", fake_capabilities)
 
     async with (
         httpx.AsyncClient(transport=httpx.ASGITransport(app=host_app), base_url="http://127.0.0.1:18181") as host_client,
@@ -1427,6 +1468,8 @@ async def test_two_server_open_join_routes_original_request_and_bootstraps_proje
         forwarded = []
 
         def route_to_host(url, payload, *, headers=None, body_bytes=None):
+            if payload.get("method") == "anp.get_capabilities":
+                return runtime_capabilities("did:wba:join-host.test")
             forwarded.append((url, payload, headers, body_bytes))
             return host_response.json()
 

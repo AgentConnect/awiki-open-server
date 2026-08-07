@@ -18,7 +18,15 @@ from awiki_open_server.service_identity import (
 )
 from awiki_open_server.shared.errors import InvalidParams
 from tests.conftest import rpc
-from tests.helpers import did_keypair_document, origin_proof, register, register_with_key, remote_direct_result
+from tests.helpers import did_keypair_document, origin_proof, register, register_with_key, remote_direct_result, runtime_capabilities
+
+
+def signed_direct(meta: dict, body: dict, private_key: ed25519.Ed25519PrivateKey) -> dict:
+    return {
+        "meta": meta,
+        "auth": {"scheme": "anp-rfc9421-origin-proof-v1", "origin_proof": origin_proof(meta, body, private_key)},
+        "body": body,
+    }
 
 @pytest.mark.asyncio
 async def test_inbox_mark_read_updates_owner_view_and_filters_default_inbox(client):
@@ -237,6 +245,7 @@ async def test_local_direct_to_remote_did_discovers_anp_service_and_posts(client
                     "type": "ANPMessageService",
                     "serviceEndpoint": "https://awiki.info/anp-im/rpc",
                     "serviceDid": "did:wba:awiki.info",
+                    "profiles": ["anp.direct.base.v1"],
                 }
             ],
         }
@@ -248,6 +257,7 @@ async def test_local_direct_to_remote_did_discovers_anp_service_and_posts(client
         return remote_direct_result(payload)
 
     monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
+    monkeypatch.setattr(runtime, "_http_post_json", lambda *_args, **_kwargs: runtime_capabilities("did:wba:awiki.info"))
     monkeypatch.setattr(messaging_services, "_http_post_json", fake_post_json)
 
     meta = {
@@ -306,6 +316,7 @@ async def test_remote_direct_requires_origin_proof(client, monkeypatch):
                     "type": "ANPMessageService",
                     "serviceEndpoint": "https://awiki.info/anp-im/rpc",
                     "serviceDid": "did:wba:awiki.info",
+                    "profiles": ["anp.direct.base.v1"],
                 }
             ],
         }
@@ -348,6 +359,7 @@ async def test_remote_direct_rejects_invalid_origin_proof_signature(client, monk
                     "type": "ANPMessageService",
                     "serviceEndpoint": "https://awiki.info/anp-im/rpc",
                     "serviceDid": "did:wba:awiki.info",
+                    "profiles": ["anp.direct.base.v1"],
                 }
             ],
         }
@@ -391,6 +403,7 @@ async def test_remote_direct_rejects_message_service_incompatible_result(client,
                     "type": "ANPMessageService",
                     "serviceEndpoint": "https://awiki.info/anp-im/rpc",
                     "serviceDid": "did:wba:awiki.info",
+                    "profiles": ["anp.direct.base.v1"],
                 }
             ],
         }
@@ -399,6 +412,7 @@ async def test_remote_direct_rejects_message_service_incompatible_result(client,
         return remote_direct_result(payload, overrides={"target_did": "did:wba:awiki.info:users:other"})
 
     monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
+    monkeypatch.setattr(runtime, "_http_post_json", lambda *_args, **_kwargs: runtime_capabilities("did:wba:awiki.info"))
     monkeypatch.setattr(messaging_services, "_http_post_json", fake_post_json)
     meta = {
         "profile": "anp.direct.base.v1",
@@ -451,6 +465,7 @@ async def test_remote_direct_with_service_identity_adds_verifiable_http_signatur
                         "type": "ANPMessageService",
                         "serviceEndpoint": "https://awiki.info/anp-im/rpc",
                         "serviceDid": "did:wba:awiki.info",
+                        "profiles": ["anp.direct.base.v1"],
                     }
                 ],
             }
@@ -463,6 +478,7 @@ async def test_remote_direct_with_service_identity_adds_verifiable_http_signatur
             return remote_direct_result(payload)
 
         monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
+        monkeypatch.setattr(runtime, "_http_post_json", lambda *_args, **_kwargs: runtime_capabilities("did:wba:awiki.info"))
         monkeypatch.setattr(messaging_services, "_http_post_json", fake_post_json)
 
         meta = {
@@ -585,7 +601,7 @@ async def test_public_anp_direct_requires_local_recipient(client, monkeypatch):
         },
     )
     assert conflict["error"]["message"] == "message_id_conflict"
-    assert conflict["error"]["data"]["fields"] == ["body"]
+    assert conflict["error"]["data"]["details"]["fields"] == ["body"]
 
     inbox = await rpc(client, "/im/rpc", "inbox.get", token=alice_token)
     assert inbox["result"]["messages"][0]["body"]["text"] == "hello open server"
@@ -645,7 +661,6 @@ async def test_public_anp_direct_accepts_signed_peer_request(tmp_path, monkeypat
                 "meta": meta,
                 "auth": {"scheme": "anp-rfc9421-origin-proof-v1", "origin_proof": origin_proof(meta, body_payload, remote_user_key)},
                 "body": body_payload,
-                "client": {"response_mode": "wait-final"},
             },
             "id": "peer",
         }
@@ -723,7 +738,7 @@ async def test_public_anp_direct_verifies_signature_against_public_base_url(tmp_
 
 @pytest.mark.asyncio
 async def test_anp_envelope_meta_required_fields_and_target_validation(client):
-    alice, alice_token = await register(client, "meta-alice")
+    alice, alice_token, alice_key, _ = await register_with_key(client, "meta-alice")
     bob, bob_token = await register(client, "meta-bob")
     charlie, _ = await register(client, "meta-charlie")
     group_did = "did:wba:testserver:groups:open"
@@ -742,7 +757,7 @@ async def test_anp_envelope_meta_required_fields_and_target_validation(client):
         "content_type": "text/plain",
     }
     direct_body = {"text": "valid direct envelope"}
-    valid_direct = await rpc(client, "/im/rpc", "direct.send", {"meta": direct_meta, "body": direct_body}, token=alice_token)
+    valid_direct = await rpc(client, "/im/rpc", "direct.send", signed_direct(direct_meta, direct_body, alice_key), token=alice_token)
     assert valid_direct["result"]["message_id"] == "msg-meta-direct"
 
     missing_message_id_meta = dict(direct_meta)
@@ -844,7 +859,7 @@ async def test_anp_envelope_meta_required_fields_and_target_validation(client):
 
 @pytest.mark.asyncio
 async def test_direct_send_is_idempotent_for_same_message_and_rejects_conflicts(client):
-    alice, alice_token = await register(client, "idem-alice")
+    alice, alice_token, alice_key, _ = await register_with_key(client, "idem-alice")
     bob, bob_token = await register(client, "idem-bob")
     meta = {
         "profile": "anp.direct.base.v1",
@@ -857,8 +872,8 @@ async def test_direct_send_is_idempotent_for_same_message_and_rejects_conflicts(
     }
     body = {"text": "idempotent direct"}
 
-    first = await rpc(client, "/im/rpc", "direct.send", {"meta": meta, "body": body}, token=alice_token)
-    replay = await rpc(client, "/im/rpc", "direct.send", {"meta": meta, "body": body}, token=alice_token)
+    first = await rpc(client, "/im/rpc", "direct.send", signed_direct(meta, body, alice_key), token=alice_token)
+    replay = await rpc(client, "/im/rpc", "direct.send", signed_direct(meta, body, alice_key), token=alice_token)
     assert replay["result"]["idempotent_replay"] is True
     assert replay["result"]["message_id"] == first["result"]["message_id"]
     assert replay["result"]["server_seq"] == first["result"]["server_seq"]
@@ -870,7 +885,7 @@ async def test_direct_send_is_idempotent_for_same_message_and_rejects_conflicts(
         client,
         "/im/rpc",
         "direct.send",
-        {"meta": meta, "body": {"text": "changed direct"}},
+        signed_direct(meta, {"text": "changed direct"}, alice_key),
         token=alice_token,
     )
     assert changed_body["error"]["message"] == "message_id_conflict"
@@ -881,7 +896,7 @@ async def test_direct_send_is_idempotent_for_same_message_and_rejects_conflicts(
         client,
         "/im/rpc",
         "direct.send",
-        {"meta": changed_operation_meta, "body": body},
+        signed_direct(changed_operation_meta, body, alice_key),
         token=alice_token,
     )
     assert changed_operation["error"]["message"] == "message_id_conflict"
@@ -911,7 +926,7 @@ async def test_direct_send_is_idempotent_for_same_message_and_rejects_conflicts(
 
 @pytest.mark.asyncio
 async def test_application_json_payload_shape_and_daemon_heartbeat_no_store(client):
-    alice, alice_token = await register(client, "json-alice")
+    alice, alice_token, alice_key, _ = await register_with_key(client, "json-alice")
     bob, bob_token = await register(client, "json-bob")
     group_did = "did:wba:testserver:groups:open"
     await rpc(client, "/im/rpc", "group.join", {"group_did": group_did}, token=alice_token)
@@ -926,7 +941,7 @@ async def test_application_json_payload_shape_and_daemon_heartbeat_no_store(clie
         "content_type": "application/json",
     }
     direct_body = {"payload": {"schema": "example.command.v1", "command": "ping"}}
-    direct = await rpc(client, "/im/rpc", "direct.send", {"meta": direct_meta, "body": direct_body}, token=alice_token)
+    direct = await rpc(client, "/im/rpc", "direct.send", signed_direct(direct_meta, direct_body, alice_key), token=alice_token)
     assert direct["result"]["content_type"] == "application/json"
     assert direct["result"]["body"]["payload"]["command"] == "ping"
 
@@ -981,7 +996,7 @@ async def test_application_json_payload_shape_and_daemon_heartbeat_no_store(clie
             "message": "daemon heartbeat",
         }
     }
-    heartbeat = await rpc(client, "/im/rpc", "direct.send", {"meta": heartbeat_meta, "body": heartbeat_body}, token=alice_token)
+    heartbeat = await rpc(client, "/im/rpc", "direct.send", signed_direct(heartbeat_meta, heartbeat_body, alice_key), token=alice_token)
     assert heartbeat["result"]["accepted"] is True
     assert heartbeat["result"]["delivery_state"] == "ephemeral"
     assert "server_seq" not in heartbeat["result"]
@@ -1002,7 +1017,7 @@ async def test_application_json_payload_shape_and_daemon_heartbeat_no_store(clie
             "message": "runtime started",
         }
     }
-    status = await rpc(client, "/im/rpc", "direct.send", {"meta": status_meta, "body": status_body}, token=alice_token)
+    status = await rpc(client, "/im/rpc", "direct.send", signed_direct(status_meta, status_body, alice_key), token=alice_token)
     assert status["result"]["delivery_state"] == "accepted"
     assert status["result"]["server_seq"] > 0
     final_history = await rpc(client, "/im/rpc", "direct.get_history", {"peer_did": alice}, token=bob_token)
@@ -1011,7 +1026,7 @@ async def test_application_json_payload_shape_and_daemon_heartbeat_no_store(clie
 
 @pytest.mark.asyncio
 async def test_message_local_views_project_payload_attachment_and_binary_content(client):
-    alice, alice_token = await register(client, "projection-alice")
+    alice, alice_token, alice_key, _ = await register_with_key(client, "projection-alice")
     bob, bob_token = await register(client, "projection-bob")
     group_did = "did:wba:testserver:groups:open"
     await rpc(client, "/im/rpc", "group.join", {"group_did": group_did}, token=alice_token)
@@ -1039,7 +1054,7 @@ async def test_message_local_views_project_payload_attachment_and_binary_content
         client,
         "/im/rpc",
         "direct.send",
-        {"meta": direct_manifest_meta, "body": {"payload": manifest_payload}},
+        signed_direct(direct_manifest_meta, {"payload": manifest_payload}, alice_key),
         token=alice_token,
     )
 
@@ -1053,7 +1068,7 @@ async def test_message_local_views_project_payload_attachment_and_binary_content
         client,
         "/im/rpc",
         "direct.send",
-        {"meta": direct_binary_meta, "body": {"payload_b64u": "aGVsbG8"}},
+        signed_direct(direct_binary_meta, {"payload_b64u": "aGVsbG8"}, alice_key),
         token=alice_token,
     )
 

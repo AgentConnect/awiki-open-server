@@ -129,12 +129,12 @@ This server is not a proxy for `awiki.info`. A remote diagnostic may use `awiki.
 
 ```bash
 awiki-cli tenant setup community \
-  --backend-base-url http://127.0.0.1:8765 \
-  --did-host localhost
+  --backend-base-url http://127.0.0.1.nip.io:8765 \
+  --did-host 127.0.0.1.nip.io
 awiki-cli init
 ```
 
-The repository provides repeatable Rust CLI gates covering local registration, Direct, the Community Group lifecycle in both host directions, People, and Site. Do not connect to the current Open Server with `--secure required`.
+`localhost` is not a valid DID host for current CLI/WNS validation; `127.0.0.1.nip.io` is for loopback testing only. The repository separates the latest-CLI connection/write gate (`smoke-rust-cli-connect`) from the complete local journey gate (`smoke-rust-cli-local`). Open Server supports the CLI's `anp.sync.local.v2` wire contract only in single-DID/single-device pull mode; it does not support device sharing, multiple devices for one DID, snapshot recovery, or E2EE. See [Client Compatibility](docs/client-compatibility.md). Do not connect with `--secure required`.
 
 ### AWiki Me
 

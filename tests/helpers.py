@@ -134,3 +134,23 @@ def remote_direct_result(payload: dict, *, target_did: str | None = None, overri
     if overrides:
         result.update(overrides)
     return {"jsonrpc": "2.0", "result": result, "id": payload["id"]}
+
+
+def runtime_capabilities(service_did: str) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "result": {
+            "service_did": service_did,
+            "profiles": [
+                "anp.core.binding.v1",
+                "anp.identity.discovery.v1",
+                "anp.direct.base.v1",
+                "anp.group.base.v1",
+                "anp.attachment.v1",
+                "anp.federation.relay.v1",
+            ],
+            "security_profiles": ["transport-protected"],
+            "transports": ["http"],
+        },
+        "id": "discovery-test",
+    }
