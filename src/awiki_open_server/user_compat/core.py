@@ -12,7 +12,14 @@ from fastapi import Request
 from awiki_open_server.app.settings import Settings
 from awiki_open_server.protocol.registry import STANDARD_PROFILES
 from awiki_open_server.service_identity import verify_did_document_data_integrity_proof
-from awiki_open_server.shared.errors import Conflict, InvalidParams, NotFound, NotSupported, Unauthorized
+from awiki_open_server.shared.errors import (
+    Conflict,
+    InvalidParams,
+    NotFound,
+    NotSupported,
+    Unauthorized,
+    UserServiceNotFound,
+)
 from awiki_open_server.shared.ids import new_id, now_iso
 from awiki_open_server.shared import runtime
 from awiki_open_server.storage.db import Store
@@ -28,6 +35,14 @@ def _load(raw: str) -> Any:
 
 def _sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _user_service_not_found(resource: str, value: str | None = None) -> UserServiceNotFound:
+    labels = {"did": "DID", "handle": "Handle", "user": "User", "profile": "Profile"}
+    data: dict[str, Any] = {"code": f"{resource}_not_found", "resource": resource}
+    if value:
+        data[resource] = value
+    return UserServiceNotFound(f"{labels.get(resource, resource.title())} not found", data=data)
 
 
 def _parse_time(value: str) -> datetime:
@@ -632,17 +647,45 @@ def update_me(params: dict[str, Any], request: Request) -> dict[str, Any]:
 
 
 def public_profile(params: dict[str, Any], request: Request) -> dict[str, Any]:
+    settings = get_settings(request)
     did = params.get("did") or params.get("user_id")
     handle = params.get("handle")
+    if did and handle:
+        raise InvalidParams("did_or_handle_exclusive")
     with get_store(request).connect() as conn:
         if did:
-            row = conn.execute("SELECT * FROM profiles WHERE did = ?", (did,)).fetchone()
+            row = conn.execute(
+                """
+                SELECT p.* FROM profiles p
+                JOIN users u ON u.did = p.did
+                JOIN did_documents d ON d.did = p.did
+                WHERE p.did = ?
+                  AND u.revoked_at IS NULL
+                  AND d.status = 'active'
+                  AND d.revoked_at IS NULL
+                """,
+                (did,),
+            ).fetchone()
         elif handle:
-            row = conn.execute("SELECT * FROM profiles WHERE handle = ?", (handle,)).fetchone()
+            _, _, stored_handle, _ = _split_handle(str(handle), settings.did_domain)
+            row = conn.execute(
+                """
+                SELECT p.* FROM profiles p
+                JOIN users u ON u.did = p.did
+                JOIN did_documents d ON d.did = p.did
+                WHERE p.handle = ?
+                  AND u.revoked_at IS NULL
+                  AND d.status = 'active'
+                  AND d.revoked_at IS NULL
+                """,
+                (stored_handle,),
+            ).fetchone()
         else:
             raise InvalidParams("did_or_handle_required")
     if not row:
-        raise NotFound("profile_not_found")
+        if handle:
+            raise _user_service_not_found("handle", str(handle))
+        raise _user_service_not_found("did", str(did))
     profile = dict(row)
     with get_store(request).connect() as conn:
         doc_row = conn.execute(
@@ -869,7 +912,7 @@ def resolve_profile(params: dict[str, Any], request: Request) -> dict[str, Any]:
             (did,),
         ).fetchone()
     if not row:
-        raise NotFound("did_document_not_found")
+        raise _user_service_not_found("did", str(did))
     return {"did": did, "document": _load(row["document_json"])}
 
 
@@ -926,7 +969,11 @@ def handle_lookup(params: dict[str, Any], request: Request) -> dict[str, Any]:
             raise InvalidParams("did_or_handle_required")
     if not row:
         if not isinstance(did, str) or _did_domain(did) in {None, settings.did_domain.lower()}:
-            raise NotFound("handle_not_found")
+            value = str(handle) if handle else None
+            error = _user_service_not_found("handle", value)
+            if did and not handle:
+                error.data["did"] = str(did)
+            raise error
         document = runtime._fetch_did_document(did, settings)
         verify_did_document_data_integrity_proof(document, expected_did=did)
         parts = _did_parts(did)
@@ -934,10 +981,10 @@ def handle_lookup(params: dict[str, Any], request: Request) -> dict[str, Any]:
             user_marker = "user" if "user" in parts else "users"
             local = parts[parts.index(user_marker) + 1]
         except (ValueError, IndexError) as exc:
-            raise NotFound("handle_not_found") from exc
+            raise _user_service_not_found("handle") from exc
         domain = _did_domain(did)
         if not local or not domain:
-            raise NotFound("handle_not_found")
+            raise _user_service_not_found("handle")
         full = f"{local}.{domain}"
         return {
             "did": did,
@@ -969,7 +1016,12 @@ def handle_lookup(params: dict[str, Any], request: Request) -> dict[str, Any]:
 
 def _handle_document_from_profile(profile: dict[str, Any], settings: Settings) -> dict[str, Any]:
     local, domain, _, full = _split_handle(profile["handle"], settings.did_domain)
-    updated = now_iso()
+    revoked = bool(
+        profile.get("user_revoked_at")
+        or profile.get("did_revoked_at")
+        or profile.get("did_status") == "revoked"
+    )
+    updated = str(profile.get("did_updated_at") or now_iso())
     display_name = profile.get("display_name")
     description = profile.get("description")
     avatar_uri = profile.get("avatar_uri")
@@ -977,7 +1029,7 @@ def _handle_document_from_profile(profile: dict[str, Any], settings: Settings) -
     return {
         "handle": full,
         "did": profile["did"],
-        "status": "active",
+        "status": "revoked" if revoked else "active",
         "binding_generation": str(profile.get("handle_binding_generation") or "1"),
         "updated": updated,
         "profile": {
@@ -1002,29 +1054,51 @@ def handle_resolution_document(local_part: str, request: Request) -> dict[str, A
     with get_store(request).connect() as conn:
         row = conn.execute(
             """
-            SELECT p.* FROM profiles p
+            SELECT p.*,
+                   u.handle_binding_generation,
+                   u.revoked_at AS user_revoked_at,
+                   d.status AS did_status,
+                   d.revoked_at AS did_revoked_at,
+                   d.updated_at AS did_updated_at
+            FROM profiles p
             JOIN users u ON u.did = p.did
-            LEFT JOIN did_documents d ON d.did = p.did
+            JOIN did_documents d ON d.did = p.did
             WHERE p.handle = ?
-              AND u.revoked_at IS NULL
-              AND COALESCE(d.status, 'active') = 'active'
-              AND d.revoked_at IS NULL
             """,
             (stored_handle,),
         ).fetchone()
     if not row:
-        raise NotFound("handle_not_found")
+        raise _user_service_not_found("handle", stored_handle.replace("@", ".", 1))
     return _handle_document_from_profile(dict(row), settings)
 
 
 def handle_confirmation_document(did: str, request: Request) -> dict[str, Any]:
-    profile = _profile_from_did(request, did)
+    with get_store(request).connect() as conn:
+        row = conn.execute(
+            """
+            SELECT p.*,
+                   u.handle_binding_generation,
+                   u.revoked_at AS user_revoked_at,
+                   d.status AS did_status,
+                   d.revoked_at AS did_revoked_at,
+                   d.updated_at AS did_updated_at
+            FROM profiles p
+            JOIN users u ON u.did = p.did
+            JOIN did_documents d ON d.did = p.did
+            WHERE p.did = ?
+            """,
+            (did,),
+        ).fetchone()
+    if not row:
+        raise _user_service_not_found("did", did)
+    handle_document = _handle_document_from_profile(dict(row), get_settings(request))
     return {
         "did": did,
         "confirmed": True,
-        "status": "active",
-        "updated": now_iso(),
-        "handle": _handle_document_from_profile(profile, get_settings(request))["handle"],
+        "status": handle_document["status"],
+        "binding_generation": handle_document["binding_generation"],
+        "updated": handle_document["updated"],
+        "handle": handle_document["handle"],
     }
 
 
