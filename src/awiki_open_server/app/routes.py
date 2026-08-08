@@ -309,15 +309,38 @@ def mount_routes(app: FastAPI) -> None:
 
     async def im_ws(websocket: WebSocket):
         token = websocket.query_params.get("token") or websocket.query_params.get("ticket")
+        if not token:
+            authorization = websocket.headers.get("authorization", "")
+            if authorization.lower().startswith("bearer "):
+                token = authorization[7:].strip()
         did = did_for_token(websocket, token) if token else None
         if not did:
             await websocket.close(code=4401)
             return
-        await websocket.accept()
+        offered_subprotocols = {
+            value.strip()
+            for value in websocket.headers.get("sec-websocket-protocol", "").split(",")
+            if value.strip()
+        }
+        sync_changed_v2 = "awiki.sync.changed.v2" in offered_subprotocols
+        await websocket.accept(subprotocol="awiki.sync.changed.v2" if sync_changed_v2 else None)
         hub = websocket.app.state.realtime_hub
         queue = hub.subscribe(did)
-        await websocket.send_json(
-            {
+        if sync_changed_v2:
+            await websocket.send_json(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "sync.changed",
+                    "params": {"domains": ["message"], "reason": "reconnected"},
+                    "sync": {
+                        "schema_version": 2,
+                        "account_scan_seq_hint": None,
+                        "domain_versions": {},
+                    },
+                }
+            )
+        else:
+            await websocket.send_json({
                 "jsonrpc": "2.0",
                 "method": "sync",
                 "params": {
@@ -336,8 +359,7 @@ def mount_routes(app: FastAPI) -> None:
                         "recovery": "call sync.delta and sync.thread_after",
                     },
                 },
-            }
-        )
+            })
         try:
             while True:
                 notify_task = asyncio.create_task(queue.get())
@@ -352,7 +374,25 @@ def mount_routes(app: FastAPI) -> None:
                     with suppress(asyncio.CancelledError):
                         await task
                 if notify_task in done:
-                    await websocket.send_json(notify_task.result())
+                    notification = notify_task.result()
+                    if sync_changed_v2:
+                        raw_sync = notification.get("sync") if isinstance(notification.get("sync"), dict) else {}
+                        event_seq = raw_sync.get("event_seq")
+                        account_hint = str(event_seq) if event_seq is not None and str(event_seq).isdigit() else None
+                        await websocket.send_json(
+                            {
+                                "jsonrpc": "2.0",
+                                "method": "sync.changed",
+                                "params": {"domains": ["message"], "reason": "message_available"},
+                                "sync": {
+                                    "schema_version": 2,
+                                    "account_scan_seq_hint": account_hint,
+                                    "domain_versions": {},
+                                },
+                            }
+                        )
+                    else:
+                        await websocket.send_json(notification)
                 else:
                     receive_task.result()
         except WebSocketDisconnect:

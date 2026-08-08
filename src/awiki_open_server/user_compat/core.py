@@ -14,6 +14,7 @@ from awiki_open_server.protocol.registry import STANDARD_PROFILES
 from awiki_open_server.service_identity import verify_did_document_data_integrity_proof
 from awiki_open_server.shared.errors import Conflict, InvalidParams, NotFound, NotSupported, Unauthorized
 from awiki_open_server.shared.ids import new_id, now_iso
+from awiki_open_server.shared import runtime
 from awiki_open_server.storage.db import Store
 
 
@@ -924,7 +925,33 @@ def handle_lookup(params: dict[str, Any], request: Request) -> dict[str, Any]:
         else:
             raise InvalidParams("did_or_handle_required")
     if not row:
-        raise NotFound("handle_not_found")
+        if not isinstance(did, str) or _did_domain(did) in {None, settings.did_domain.lower()}:
+            raise NotFound("handle_not_found")
+        document = runtime._fetch_did_document(did, settings)
+        verify_did_document_data_integrity_proof(document, expected_did=did)
+        parts = _did_parts(did)
+        try:
+            user_marker = "user" if "user" in parts else "users"
+            local = parts[parts.index(user_marker) + 1]
+        except (ValueError, IndexError) as exc:
+            raise NotFound("handle_not_found") from exc
+        domain = _did_domain(did)
+        if not local or not domain:
+            raise NotFound("handle_not_found")
+        full = f"{local}.{domain}"
+        return {
+            "did": did,
+            "user_id": f"user-{hashlib.sha256(did.encode()).hexdigest()[:24]}",
+            "handle": local,
+            "domain": domain,
+            "full_handle": full,
+            "status": "active",
+            "profile": {
+                "did": did,
+                "handle": f"{local}@{domain}",
+                "display_name": local,
+            },
+        }
     profile = dict(row)
     local, domain, _, full = _split_handle(profile["handle"], settings.did_domain)
     return {

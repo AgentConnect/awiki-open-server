@@ -2081,8 +2081,9 @@ def _group_send_dispatch(params: dict[str, Any], request: Request) -> dict[str, 
 def _group_members_dispatch(params: dict[str, Any], request: Request) -> dict[str, Any]:
     refresh_status: dict[str, Any] | None = None
     group_did = params.get("group_did")
+    all_params = {**params, "limit": 100}
     if is_hosted_group(request, params.get("group_did")):
-        members = hosted_group_list_members(params, request)
+        members = hosted_group_list_members(all_params, request)
         source = "hosted_projection"
         with get_store(request).connect() as conn:
             group = conn.execute(
@@ -2098,22 +2099,40 @@ def _group_members_dispatch(params: dict[str, Any], request: Request) -> dict[st
             refresh_status = {"status": "refreshed" if refreshed else "not_applied"}
         except AwikiError as exc:
             refresh_status = {"status": "failed", "error": exc.error_message}
-        members = projected_group_list_members(params, request)
+        members = projected_group_list_members(all_params, request)
         source = "remote_projection"
         group_state_version = "1"
     else:
-        members = group_members(params, request)
+        members = group_members(all_params, request)
         source = "legacy_local"
         group_state_version = "1"
+    limit = _parse_local_view_limit(params.get("limit"), default=100)
+    cursor = params.get("cursor")
+    offset = 0
+    if cursor is not None:
+        if not isinstance(cursor, str) or not cursor.startswith("members:"):
+            raise InvalidParams("cursor_invalid")
+        try:
+            offset = int(cursor.removeprefix("members:"))
+        except ValueError as exc:
+            raise InvalidParams("cursor_invalid") from exc
+        if offset < 0 or offset > len(members):
+            raise InvalidParams("cursor_invalid")
+    total = len(members)
+    page_members = members[offset : offset + limit]
+    next_offset = offset + len(page_members)
+    has_more = next_offset < total
     result = {
         "group_did": group_did,
         "group_state_version": group_state_version,
-        "members": members,
-        "total": len(members),
-        "has_more": False,
+        "members": page_members,
+        "total": total,
+        "has_more": has_more,
         "source": source,
         "warnings": [],
     }
+    if has_more:
+        result["next_cursor"] = f"members:{next_offset}"
     if refresh_status is not None:
         result["projection_refresh"] = refresh_status
     return result

@@ -353,7 +353,6 @@ def _ticket_object_uri(settings: Settings, object_id: str, stored_uri: Any) -> s
 def _ticket_direct_binding(params: dict[str, Any]) -> dict[str, Any]:
     attachment_id = _require_ticket_string(params, "attachment_id")
     object_uri = _require_ticket_string(params, "object_uri")
-    sender_did = _require_ticket_string(params, "sender_did")
     requester_did = _require_ticket_string(params, "requester_did")
     message_id = _require_ticket_string(params, "message_id")
     message_security_profile = _normalize_ticket_security_profile(params.get("message_security_profile"))
@@ -368,7 +367,6 @@ def _ticket_direct_binding(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "attachment_id": attachment_id,
         "object_uri": object_uri,
-        "sender_did": sender_did,
         "requester_did": requester_did,
         "message_id": message_id,
         "message_security_profile": message_security_profile,
@@ -379,7 +377,6 @@ def _ticket_direct_binding(params: dict[str, Any]) -> dict[str, Any]:
 def _ticket_group_binding(params: dict[str, Any]) -> dict[str, Any]:
     attachment_id = _require_ticket_string(params, "attachment_id")
     object_uri = _require_ticket_string(params, "object_uri")
-    sender_did = _require_ticket_string(params, "sender_did")
     requester_did = _require_ticket_string(params, "requester_did")
     message_id = _require_ticket_string(params, "message_id")
     message_security_profile = _normalize_ticket_security_profile(params.get("message_security_profile"))
@@ -392,7 +389,6 @@ def _ticket_group_binding(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "attachment_id": attachment_id,
         "object_uri": object_uri,
-        "sender_did": sender_did,
         "requester_did": requester_did,
         "message_id": message_id,
         "message_security_profile": message_security_profile,
@@ -444,6 +440,14 @@ def _ensure_group_attachment_context(conn, binding: dict[str, Any]) -> None:
         (binding["group_did"], binding["requester_did"]),
     ).fetchone()
     if not member:
+        member = conn.execute(
+            """
+            SELECT 1 FROM hosted_group_members
+            WHERE group_did = ? AND agent_did = ? AND status = 'active'
+            """,
+            (binding["group_did"], binding["requester_did"]),
+        ).fetchone()
+    if not member:
         raise Unauthorized("anp.attachment.unauthorized_requester")
     row = conn.execute(
         """
@@ -452,6 +456,14 @@ def _ensure_group_attachment_context(conn, binding: dict[str, Any]) -> None:
         """,
         (binding["message_id"], binding["group_did"], binding["sender_did"]),
     ).fetchone()
+    if not row:
+        row = conn.execute(
+            """
+            SELECT body_json FROM hosted_group_messages
+            WHERE message_id = ? AND group_did = ? AND sender_did = ?
+            """,
+            (binding["message_id"], binding["group_did"], binding["sender_did"]),
+        ).fetchone()
     if not row or not _attachment_manifest_has_object(row["body_json"], attachment_id=binding["attachment_id"], object_uri=binding["object_uri"]):
         raise Unauthorized("anp.attachment.grant_not_found")
 
@@ -515,6 +527,10 @@ def attachment_ticket(params: dict[str, Any], request: Request) -> dict[str, Any
             raise NotFound("object_not_found")
         stored_object_uri = _ticket_object_uri(settings, str(row["object_id"]), row["object_uri"])
         if binding:
+            # P7 does not carry the original message sender in the ticket body.
+            # The object owner is authoritative and is subsequently bound to the
+            # persisted direct/group message context before a ticket is issued.
+            binding["sender_did"] = str(row["owner_did"])
             if binding["object_uri"] != stored_object_uri:
                 raise InvalidParams("anp.attachment.ticket_binding_mismatch", data={"field": "object_uri"})
             stored_attachment_id = row["source_attachment_id"]

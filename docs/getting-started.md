@@ -122,17 +122,24 @@ PYTHONPATH=../anp/anp:src \
   --clean
 ```
 
-Then run the complete user-journey gate:
+Then run the complete local, Realtime/restart, and two-domain gates:
 
 ```bash
 PYTHONPATH=../anp/anp:src \
 .venv/bin/python scripts/awiki_open_cli.py smoke-rust-cli-local \
   --awiki-cli-bin /path/to/awiki-cli \
   --data-root /tmp/awiki-open-server-rust-cli-local \
+  --standard-https \
   --clean
+
+PYTHONPATH=../anp/anp:src .venv/bin/python scripts/awiki_open_cli.py \
+  smoke-rust-cli-realtime-restart --awiki-cli-bin /path/to/awiki-cli --clean
+
+PYTHONPATH=../anp/anp:src .venv/bin/python scripts/awiki_open_cli.py \
+  smoke-rust-cli-cross-domain --awiki-cli-bin /path/to/awiki-cli --clean
 ```
 
-As verified on 2026-08-07, `awiki-cli-rs2` `release/0714` commit `3200847d` passes the connection gate, and a clean build of the same source passes the complete local journey gate. Inbox/History uses `anp.sync.local.v2` in a deliberately limited mode: one DID, exactly one registered device, one client instance, tail-only bootstrap from the retained event stream, delta pull, batch hydration, and thread catch-up. Open Server rejects a second device/client instance and does not implement device sharing, snapshot/compact recovery, or multi-device cursor convergence. Record the CLI commit, binary digest, server commit, and exact gate used.
+As verified on 2026-08-08, `awiki-cli` 1.0.43 commit `bbeb8a5c` passes these gates. Inbox/History uses `anp.sync.local.v2` in a deliberately limited mode: one DID, exactly one registered device, one client instance, tail-only bootstrap from the retained event stream, delta pull, batch hydration, and thread catch-up. Open Server rejects a second device/client instance and does not implement device sharing, snapshot/compact recovery, or multi-device cursor convergence. The standard-HTTPS and cross-domain commands use an isolated Linux network namespace and require `unshare`, `mount`, and `ip`. Record the CLI commit, binary digest, server commit, and exact gate used.
 
 ## 9. Important development switches
 

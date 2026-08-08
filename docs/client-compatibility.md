@@ -2,13 +2,13 @@
 
 [English](client-compatibility.md) | [简体中文](client-compatibility.zh-CN.md)
 
-Last reviewed: 2026-08-07. Record a specific client version/commit, server commit, and verification date.
+Last reviewed: 2026-08-08. Record a specific client version/commit, server commit, and verification date.
 
 ## 1. Overview
 
 | Client/peer | Position | Known capabilities | Key limitations |
 | --- | --- | --- | --- |
-| `awiki-cli` | Primary compatibility client | release/0714 `3200847d`: tenant setup, canonical v1 registration, plaintext Direct Inbox/History, and local Community Group journey verified | Sync v2 is single-device pull only; no device sharing, second device, snapshot recovery, or E2EE. Attachment/realtime remain separate gates. |
+| `awiki-cli` | Primary compatibility client | 1.0.43 `bbeb8a5c`: local Attachment/members/mark-read/restart, Realtime Sync v2, and bidirectional Direct/Group cross-domain gates verified | Sync v2 is single-device pull only; no device sharing, second device, snapshot recovery, or E2EE. |
 | AWiki Me | Basic product compatibility target | Identity/messages/attachments on a custom tenant require continuous validation | Agent realm allowlist, no E2EE, and no claim of every app feature. |
 | Other ANP peer | Selected public methods | Capability, Direct, selected Group/Attachment | Not complete federation; origin proof and service signature required. |
 | Legacy AWiki client | Compatibility routes | User/Message Service-shaped routes | Shims are not production identity providers or a complete hosted platform. |
@@ -17,7 +17,7 @@ Last reviewed: 2026-08-07. Record a specific client version/commit, server commi
 
 Repository and public gates cover DID registration; Direct send, Inbox, and History; Group create/get/list/add/join/members/update/send/messages/leave/remove in both host directions; People follow/status/following/followers; Site root/pages; and attachments as implemented.
 
-Those are gate targets, not a claim that every item always passes. A clean build of `awiki-cli-rs2` release/0714 commit `3200847d` was verified on 2026-08-07: tenant setup, registration through `/user-service/v1/did-auth/rpc`, plaintext Direct send/Inbox/History, the current local Group create/get/list/add/update/join/send/messages/leave/remove journey, People, and Site pass. Explicit Group-members inventory, attachment, and realtime/restart remain separate release-matrix checks. The v2 sync profile is a wire-version contract, not a multi-device claim: Open Server binds one DID to exactly one device and one client instance, supports tail-only bootstrap, delta, `message.get_batch`, and thread catch-up, and rejects additional devices/instances. It does not expose snapshot recovery or cross-device state sharing.
+Those are gate targets, not a claim that every future client passes automatically. A clean `awiki-cli` 1.0.43 build at commit `bbeb8a5c` was verified on 2026-08-08. The real-CLI gates cover binary Direct/Group Attachment download with byte comparison, members and cursor pagination, idempotent mark-read and restart persistence, foreground Realtime with `awiki.sync.changed.v2`, listener/server restart recovery, and two independent TLS domains with bidirectional plaintext Direct and a Community Group hosted in each direction. The v2 sync profile is a wire-version contract, not a multi-device claim: Open Server binds one DID to exactly one device and one client instance, supports tail-only bootstrap, delta, `message.get_batch`, and thread catch-up, and rejects additional devices/instances. It does not expose snapshot recovery or cross-device state sharing.
 
 Run the gates separately:
 
@@ -26,9 +26,25 @@ Run the gates separately:
 PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-rust-cli-connect \
   --awiki-cli-bin /path/to/pinned/awiki-cli --clean
 
-# Complete local journey gate, including single-device v2 Inbox/History.
+# Complete local gate. Standard HTTPS is required for attachment DID discovery;
+# the script creates an isolated Linux network namespace and test CA.
 PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-rust-cli-local \
+  --awiki-cli-bin /path/to/pinned/awiki-cli --standard-https --clean
+
+# Foreground Realtime/Sync v2 plus listener and OpenServer restart recovery.
+PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-rust-cli-realtime-restart \
   --awiki-cli-bin /path/to/pinned/awiki-cli --clean
+
+# Two TLS OpenServer domains, bidirectional plaintext Direct and both Group Host directions.
+PYTHONPATH=../anp/anp:src python3 scripts/awiki_open_cli.py smoke-rust-cli-cross-domain \
+  --awiki-cli-bin /path/to/pinned/awiki-cli --clean
+```
+
+The namespace-backed HTTPS gates require Linux `unshare`, `mount`, and `ip`. They do not alter the host network or install a listener service. The opt-in pytest wrapper is:
+
+```bash
+AWIKI_RUN_RUST_CLI_SYSTEM_TESTS=1 AWIKI_CLI_BIN=/path/to/pinned/awiki-cli \
+PYTHONPATH=../anp/anp:src python3 -m pytest tests/test_rust_cli_system.py -q
 ```
 
 Reports must distinguish `connection-and-write passed`, `single-device sync v2 passed`, and `full local user journey passed`. Record the CLI commit, `awiki-cli version`, artifact SHA-256, Open Server commit, and date.

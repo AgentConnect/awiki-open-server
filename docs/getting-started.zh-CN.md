@@ -157,15 +157,27 @@ PYTHONPATH=../anp/anp:src \
 .venv/bin/python scripts/awiki_open_cli.py smoke-rust-cli-local \
   --awiki-cli-bin /path/to/awiki-cli \
   --data-root /tmp/awiki-open-server-rust-cli-local \
+  --standard-https \
   --clean
 ```
 
-截至 2026-08-07，`awiki-cli-rs2` `release/0714` 提交 `3200847d` 已通过连接 Gate；同一源码的
-干净构建也已通过当前仓库本地用户旅程 Gate。`msg inbox/history` 使用受限的
+继续运行 foreground Realtime/restart 和双域 Gate：
+
+```bash
+PYTHONPATH=../anp/anp:src .venv/bin/python scripts/awiki_open_cli.py \
+  smoke-rust-cli-realtime-restart --awiki-cli-bin /path/to/awiki-cli --clean
+
+PYTHONPATH=../anp/anp:src .venv/bin/python scripts/awiki_open_cli.py \
+  smoke-rust-cli-cross-domain --awiki-cli-bin /path/to/awiki-cli --clean
+```
+
+截至 2026-08-08，`awiki-cli` 1.0.43、提交 `bbeb8a5c` 已通过完整本地、Realtime/restart 与
+cross-domain Gate。`msg inbox/history` 使用受限的
 `anp.sync.local.v2`：一个 DID、恰好一个注册设备、一个 client instance，采用 tail-only
 bootstrap（从保留事件流起点拉取）、delta、batch hydration 和 thread catch-up。Open Server
 会拒绝第二个设备/client instance，不支持设备间共享、snapshot/compact recovery 或多设备游标
-收敛。验证记录必须包含 CLI commit、二进制摘要、Open Server commit 和实际执行的 Gate。
+收敛。standard-HTTPS 与 cross-domain 命令使用隔离的 Linux 网络命名空间，需要 `unshare`、
+`mount` 和 `ip`。验证记录必须包含 CLI commit、二进制摘要、Open Server commit 和实际执行的 Gate。
 
 ## 9. 重要开发开关
 

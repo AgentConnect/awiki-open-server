@@ -347,6 +347,31 @@ async def test_managed_group_lifecycle_permissions_versions_and_receipts(client)
         token=owner_token,
     )
     assert {item["agent_did"] for item in members["result"]["members"]} == {owner_did, admin_did}
+    first_member_page = await rpc(
+        client,
+        "/im/rpc",
+        "group.list_members",
+        {"group_did": group_did, "limit": 1},
+        token=owner_token,
+    )
+    assert len(first_member_page["result"]["members"]) == 1
+    assert first_member_page["result"]["total"] == 2
+    assert first_member_page["result"]["has_more"] is True
+    second_member_page = await rpc(
+        client,
+        "/im/rpc",
+        "group.list_members",
+        {
+            "group_did": group_did,
+            "limit": 1,
+            "cursor": first_member_page["result"]["next_cursor"],
+        },
+        token=owner_token,
+    )
+    assert len(second_member_page["result"]["members"]) == 1
+    assert second_member_page["result"]["members"] != first_member_page["result"]["members"]
+    assert second_member_page["result"]["has_more"] is False
+    assert "next_cursor" not in second_member_page["result"]
     with client._transport.app.state.store.connect() as conn:
         tombstones = conn.execute(
             """
