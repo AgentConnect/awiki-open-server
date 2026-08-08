@@ -152,3 +152,69 @@ async def test_users_rpc_compat_routes(client):
     missing = await rpc(client, "/users/rpc", "get_by_did", {"did": "did:wba:testserver:users:nope"}, token=alice_token)
     assert missing["error"]["message"] == "profile_not_found"
 
+
+@pytest.mark.asyncio
+async def test_profile_and_handle_not_found_errors_match_user_service_contract(client):
+    missing_handle = "missing-profile.testserver"
+    missing_did = "did:wba:testserver:user:missing-profile:e1_missing"
+
+    for path in (
+        "/did/profile/rpc",
+        "/user-service/did/profile/rpc",
+        "/user-service/v1/did/profile/rpc",
+    ):
+        by_handle = await rpc(client, path, "get_public_profile", {"handle": missing_handle})
+        assert by_handle["error"] == {
+            "code": -32002,
+            "message": "Handle not found",
+            "data": {
+                "code": "handle_not_found",
+                "resource": "handle",
+                "handle": missing_handle,
+            },
+        }
+
+        by_did = await rpc(client, path, "get_public_profile", {"did": missing_did})
+        assert by_did["error"] == {
+            "code": -32002,
+            "message": "DID not found",
+            "data": {"code": "did_not_found", "resource": "did", "did": missing_did},
+        }
+
+        resolve = await rpc(client, path, "resolve", {"did": missing_did})
+        assert resolve["error"] == by_did["error"]
+
+    for path in (
+        "/handle/rpc",
+        "/user-service/handle/rpc",
+        "/user-service/v1/handle/rpc",
+    ):
+        lookup = await rpc(client, path, "lookup", {"handle": missing_handle})
+        assert lookup["error"] == {
+            "code": -32002,
+            "message": "Handle not found",
+            "data": {
+                "code": "handle_not_found",
+                "resource": "handle",
+                "handle": missing_handle,
+            },
+        }
+
+    for path in (
+        "/.well-known/handle/missing-profile",
+        "/user-service/.well-known/handle/missing-profile",
+    ):
+        response = await client.get(path)
+        assert response.status_code == 404
+        assert response.json() == {
+            "error": "handle_not_found",
+            "handle": missing_handle,
+        }
+
+    for path in (
+        "/.well-known/handle/by-did",
+        "/user-service/.well-known/handle/by-did",
+    ):
+        response = await client.get(path, params={"did": missing_did})
+        assert response.status_code == 404
+        assert response.json() == {"error": "did_not_found", "did": missing_did}

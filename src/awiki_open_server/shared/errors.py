@@ -41,6 +41,13 @@ class NotFound(AwikiError):
     message = "not_found"
 
 
+class UserServiceNotFound(AwikiError):
+    """User Service compatibility resource-not-found contract."""
+
+    code = -32002
+    message = "Resource not found"
+
+
 class Conflict(AwikiError):
     code = -32009
     message = "conflict"

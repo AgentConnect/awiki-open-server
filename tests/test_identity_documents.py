@@ -88,6 +88,21 @@ async def test_user_service_identity_compat_path_accepts_cli_did_document(client
     assert public_profile["result"]["user_id"] == did
     assert public_profile["result"]["service_endpoints"][0]["type"] == "ANPMessageService"
 
+    for path in (
+        "/did/profile/rpc",
+        "/user-service/did/profile/rpc",
+        "/user-service/v1/did/profile/rpc",
+    ):
+        for handle_value in ("cli-alice", "cli-alice.testserver", "cli-alice@testserver"):
+            by_public_handle = await rpc(
+                client,
+                path,
+                "get_public_profile",
+                {"handle": handle_value},
+            )
+            assert by_public_handle["result"]["did"] == did
+            assert by_public_handle["result"]["handle"] == "cli-alice@testserver"
+
     resolved = await client.get("/cli-alice/e1_cli/did.json")
     assert resolved.status_code == 200
     assert resolved.json()["id"] == did
@@ -98,9 +113,23 @@ async def test_user_service_identity_compat_path_accepts_cli_did_document(client
     assert handle_doc.json()["did"] == did
     assert handle_doc.json()["profile"]["type"] == "DIDSubjectProfile"
 
+    handle_doc_compat = await client.get("/user-service/.well-known/handle/cli-alice")
+    assert handle_doc_compat.status_code == 200
+    assert handle_doc_compat.json()["handle"] == handle_doc.json()["handle"]
+    assert handle_doc_compat.json()["did"] == handle_doc.json()["did"]
+    assert handle_doc_compat.json()["binding_generation"] == handle_doc.json()["binding_generation"]
+
     by_did_doc = await client.get("/.well-known/handle/by-did", params={"did": did})
     assert by_did_doc.status_code == 200
     assert by_did_doc.json()["confirmed"] is True
+
+    by_did_doc_compat = await client.get(
+        "/user-service/.well-known/handle/by-did",
+        params={"did": did},
+    )
+    assert by_did_doc_compat.status_code == 200
+    assert by_did_doc_compat.json()["did"] == by_did_doc.json()["did"]
+    assert by_did_doc_compat.json()["binding_generation"] == by_did_doc.json()["binding_generation"]
 
     my_handle = await rpc(client, "/user-service/handle/rpc", "get_my_handle", token=result["access_token"])
     assert my_handle["result"]["full_handle"] == "cli-alice.testserver"
@@ -477,14 +506,36 @@ async def test_did_auth_revoke_marks_did_inactive_and_blocks_auth_paths(client):
     assert resolved.status_code == 404
 
     handle_lookup = await rpc(client, "/user-service/handle/rpc", "lookup", {"handle": "revoked-user.testserver"})
-    assert handle_lookup["error"]["message"] == "handle_not_found"
+    assert handle_lookup["error"] == {
+        "code": -32002,
+        "message": "Handle not found",
+        "data": {
+            "code": "handle_not_found",
+            "resource": "handle",
+            "handle": "revoked-user.testserver",
+        },
+    }
 
     handle_doc = await client.get("/.well-known/handle/revoked-user")
-    assert handle_doc.status_code == 404
+    assert handle_doc.status_code == 410
+    assert handle_doc.json()["handle"] == "revoked-user.testserver"
+    assert handle_doc.json()["did"] == did
+    assert handle_doc.json()["status"] == "revoked"
+    assert handle_doc.json()["binding_generation"] == "1"
+
+    confirmation = await client.get("/.well-known/handle/by-did", params={"did": did})
+    assert confirmation.status_code == 410
+    assert confirmation.json()["did"] == did
+    assert confirmation.json()["confirmed"] is True
+    assert confirmation.json()["status"] == "revoked"
+    assert confirmation.json()["binding_generation"] == "1"
 
     public_profile = await rpc(client, "/did/profile/rpc", "get_public_profile", {"did": did})
-    assert public_profile["result"]["did"] == did
-    assert public_profile["result"]["did_document"] == {}
+    assert public_profile["error"] == {
+        "code": -32002,
+        "message": "DID not found",
+        "data": {"code": "did_not_found", "resource": "did", "did": did},
+    }
 
 
 @pytest.mark.asyncio

@@ -24,7 +24,7 @@ from awiki_open_server.services import (
 )
 from awiki_open_server.messaging.groups.outbox import group_operations_status
 from awiki_open_server.protocol.registry import PUBLIC_ANP_METHODS, PUBLIC_NOTIFICATION_METHODS, STANDARD_PROFILES
-from awiki_open_server.shared.errors import AwikiError, InvalidParams, NotFound, Unauthorized
+from awiki_open_server.shared.errors import AwikiError, InvalidParams, NotFound, Unauthorized, UserServiceNotFound
 from awiki_open_server.shared.ids import now_iso
 from awiki_open_server.shared.jsonrpc import dispatch, parse_error
 from awiki_open_server.user_compat import (
@@ -428,18 +428,34 @@ def mount_routes(app: FastAPI) -> None:
         return PlainTextResponse(body, media_type="text/markdown")
 
     @app.get("/.well-known/handle/by-did")
+    @app.get("/user-service/.well-known/handle/by-did", include_in_schema=False)
     async def handle_by_did(did: str, request: Request):
         try:
-            return handle_confirmation_document(did, request)
-        except Exception as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            document = handle_confirmation_document(did, request)
+            return JSONResponse(
+                status_code=410 if document.get("status") == "revoked" else 200,
+                content=document,
+            )
+        except (NotFound, UserServiceNotFound):
+            return JSONResponse(status_code=404, content={"error": "did_not_found", "did": did})
 
     @app.get("/.well-known/handle/{local_part}")
+    @app.get("/user-service/.well-known/handle/{local_part}", include_in_schema=False)
     async def handle_document(local_part: str, request: Request):
         try:
-            return handle_resolution_document(local_part, request)
-        except Exception as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            document = handle_resolution_document(local_part, request)
+            return JSONResponse(
+                status_code=410 if document.get("status") == "revoked" else 200,
+                content=document,
+            )
+        except (NotFound, UserServiceNotFound):
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "handle_not_found",
+                    "handle": f"{local_part}.{request.app.state.settings.did_domain}",
+                },
+            )
 
     async def upload_object(slot_id: str, request: Request, token: str | None = None):
         upload_token = token or request.headers.get("X-ANP-Upload-Token") or request.headers.get("x-anp-upload-token")
