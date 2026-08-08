@@ -362,14 +362,17 @@ def _write_event(
     )
 
 
-def _sync_active_members(conn: Any, group_did: str, event_type: str, payload: dict[str, Any]) -> None:
+def _sync_active_members(conn: Any, group_did: str, event_type: str, payload: dict[str, Any]) -> list[tuple[str, int]]:
     rows = conn.execute(
         "SELECT agent_did FROM hosted_group_members WHERE group_did = ? AND status = 'active'",
         (group_did,),
     ).fetchall()
+    events: list[tuple[str, int]] = []
     for row in rows:
-        if runtime._user_exists(conn, str(row["agent_did"])):
-            runtime.add_sync_event(conn, str(row["agent_did"]), event_type, payload)
+        agent_did = str(row["agent_did"])
+        if runtime._user_exists(conn, agent_did):
+            events.append((agent_did, runtime.add_sync_event(conn, agent_did, event_type, payload)))
+    return events
 
 
 def is_hosted_group(request: Request, group_did: str | None) -> bool:
@@ -1435,7 +1438,7 @@ def hosted_group_send(params: dict[str, Any], request: Request) -> dict[str, Any
             receipt=receipt,
             accepted_at=accepted_at,
         )
-        _sync_active_members(
+        member_sync_events = _sync_active_members(
             conn,
             group_did,
             "group.message.created",
@@ -1451,6 +1454,30 @@ def hosted_group_send(params: dict[str, Any], request: Request) -> dict[str, Any
                     "sender_did": context.sender_did,
                     "content_type": content_type,
                 },
+            },
+        )
+    for owner_did, sync_seq in member_sync_events:
+        runtime._publish_realtime(
+            request,
+            owner_did,
+            "group.incoming",
+            {
+                "group_did": group_did,
+                "message": {
+                    "message_id": message_id,
+                    "group_did": group_did,
+                    "group_event_seq": str(event_seq),
+                    "sender_did": context.sender_did,
+                    "content_type": content_type,
+                    "body": context.body,
+                    "server_seq": str(event_seq),
+                    "created_at": accepted_at,
+                },
+            },
+            {
+                "owner_did": owner_did,
+                "event_type": "group.message.created",
+                "event_seq": str(sync_seq),
             },
         )
     return result

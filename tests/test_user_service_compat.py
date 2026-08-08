@@ -25,6 +25,37 @@ def test_user_compat_package_exports_handler_maps():
 
 
 @pytest.mark.asyncio
+async def test_handle_lookup_resolves_verified_cross_domain_did_for_cli_projection(client, monkeypatch):
+    from awiki_open_server.user_compat import core
+
+    remote_did = "did:wba:remote.example:user:alice:e1_remote"
+    remote_document = {"id": remote_did, "proof": {"type": "DataIntegrityProof"}}
+    monkeypatch.setattr(core.runtime, "_fetch_did_document", lambda did, settings: remote_document)
+    monkeypatch.setattr(core, "verify_did_document_data_integrity_proof", lambda document, expected_did: None)
+
+    lookup = await rpc(
+        client,
+        "/user-service/v1/handle/rpc",
+        "lookup",
+        {"did": remote_did},
+    )
+
+    assert lookup["result"] == {
+        "did": remote_did,
+        "user_id": "user-f2f4eab482cf5794775e4016",
+        "handle": "alice",
+        "domain": "remote.example",
+        "full_handle": "alice.remote.example",
+        "status": "active",
+        "profile": {
+            "did": remote_did,
+            "handle": "alice@remote.example",
+            "display_name": "alice",
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_user_compat_did_auth_profile_and_handle_shape(client):
     registered = await rpc(
         client,

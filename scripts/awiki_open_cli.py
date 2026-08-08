@@ -4,12 +4,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -22,10 +23,38 @@ import uuid
 from typing import Any
 
 import jcs
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from cryptography.x509.oid import NameOID
 
 from awiki_open_server.service_identity import content_digest, generate_ed25519_private_key_pem
+
+
+def open_server_provenance() -> dict[str, Any]:
+    repository = Path(__file__).resolve().parents[1]
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    return {
+        "repository": str(repository),
+        "commit": commit,
+        "dirty": bool(status),
+        "changed_path_count": len(status),
+    }
 
 
 def http_get_json(base_url: str, path: str) -> tuple[int, dict]:
@@ -237,11 +266,17 @@ def wait_health(base_url: str, process: subprocess.Popen, timeout_seconds: float
 def stop_process(process: subprocess.Popen) -> None:
     if process.poll() is not None:
         return
-    process.terminate()
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        process.kill()
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         process.wait(timeout=5)
 
 
@@ -265,6 +300,9 @@ def start_open_server(
     private_key_pem: str,
     resolver_map: dict[str, str],
     public_base_url: str | None = None,
+    bind_host: str = "127.0.0.1",
+    ssl_certfile: Path | None = None,
+    ssl_keyfile: Path | None = None,
 ) -> subprocess.Popen:
     env = os.environ.copy()
     repo_root = Path(__file__).resolve().parents[1]
@@ -280,39 +318,57 @@ def start_open_server(
             "AWIKI_SERVICE_DID": f"did:wba:{domain}",
             "AWIKI_SERVICE_PRIVATE_KEY_PEM": private_key_pem.replace("\n", "\\n"),
             "AWIKI_ALLOW_UNSIGNED_PEER_DEV": "0",
+            "AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT": "0",
             "AWIKI_DID_RESOLVER_BASE_URLS": json.dumps(resolver_map),
         }
     )
-    return subprocess.Popen(
-        [
+    command = [
             sys.executable,
             "-m",
             "uvicorn",
             "awiki_open_server.app.main:create_app",
             "--factory",
             "--host",
-            "127.0.0.1",
+            bind_host,
             "--port",
             str(port),
             "--log-level",
             "warning",
-        ],
+        ]
+    if ssl_certfile is not None and ssl_keyfile is not None:
+        command.extend(["--ssl-certfile", str(ssl_certfile), "--ssl-keyfile", str(ssl_keyfile)])
+    return subprocess.Popen(
+        command,
         cwd=repo_root,
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
+    )
+
+
+def rust_cli_env(workspace: Path, home: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update({"HOME": str(home), "AWIKI_CLI_WORKSPACE_HOME_DIR": str(workspace)})
+    return env
+
+
+def start_rust_cli_listener(cli_bin: str, workspace: Path, home: Path) -> subprocess.Popen:
+    env = rust_cli_env(workspace, home)
+    env["AWIKI_CLI_INTERNAL_ENTRY"] = "1"
+    return subprocess.Popen(
+        [cli_bin, "runtime", "listener", "run"],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
     )
 
 
 def rust_cli_json(cli_bin: str, workspace: Path, home: Path, *args: str) -> dict[str, Any]:
-    env = os.environ.copy()
-    env.update(
-        {
-            "HOME": str(home),
-            "AWIKI_CLI_WORKSPACE_HOME_DIR": str(workspace),
-        }
-    )
+    env = rust_cli_env(workspace, home)
     completed = subprocess.run(
         [cli_bin, *args],
         check=False,
@@ -355,6 +411,7 @@ def initialize_rust_cli_workspace(
     *,
     base_url: str,
     did_domain: str,
+    ca_bundle: Path | None = None,
 ) -> None:
     rust_cli_json(
         cli_bin,
@@ -369,6 +426,13 @@ def initialize_rust_cli_workspace(
         did_domain,
     )
     rust_cli_json(cli_bin, workspace, home, "tenant", "use", "local")
+    if ca_bundle is not None:
+        config_path = workspace / "tenants" / "local" / "config.yaml"
+        raw = config_path.read_text(encoding="utf-8")
+        marker = "  ca_bundle: \n"
+        if marker not in raw:
+            raise RuntimeError(f"rust cli config missing services.ca_bundle marker: {config_path}")
+        config_path.write_text(raw.replace(marker, f"  ca_bundle: {json.dumps(str(ca_bundle))}\n", 1), encoding="utf-8")
     resolved = rust_cli_json(cli_bin, workspace, home, "config", "show").get("data") or {}
     expected = {
         "service_base_url": base_url,
@@ -382,6 +446,53 @@ def initialize_rust_cli_workspace(
             "rust cli workspace resolved unexpected service configuration: "
             + json.dumps({"expected": expected, "actual": actual}, ensure_ascii=False)
         )
+
+
+def generate_test_tls_material(root: Path, domains: list[str]) -> tuple[Path, Path, Path]:
+    tls_dir = root / "tls"
+    tls_dir.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc)
+    ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "AWiki Open Server Test CA")])
+    ca_cert = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(days=2))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .sign(ca_key, hashes.SHA256())
+    )
+    server_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    server_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, domains[0])])
+    server_cert = (
+        x509.CertificateBuilder()
+        .subject_name(server_name)
+        .issuer_name(ca_name)
+        .public_key(server_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(days=2))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName(domain) for domain in domains]), critical=False)
+        .sign(ca_key, hashes.SHA256())
+    )
+    ca_path = tls_dir / "ca.pem"
+    cert_path = tls_dir / "server.pem"
+    key_path = tls_dir / "server-key.pem"
+    ca_path.write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+    cert_path.write_bytes(server_cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        server_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    key_path.chmod(0o600)
+    return ca_path, cert_path, key_path
 
 
 def rust_register_did(result: dict[str, Any]) -> str:
@@ -417,15 +528,26 @@ def rust_messages(result: dict[str, Any]) -> list[dict[str, Any]]:
     return [message for message in messages if isinstance(message, dict)]
 
 
-def assert_message_visible(result: dict[str, Any], *, message_id: str, text: str) -> None:
+def find_visible_message(result: dict[str, Any], *, message_id: str, text: str | None = None) -> dict[str, Any]:
     for message in rust_messages(result):
-        if message.get("content") == text and (
-            message.get("message_id") == message_id
-            or message.get("id") == message_id
-            or message_id in json.dumps(message, ensure_ascii=False, sort_keys=True)
+        serialized = json.dumps(message, ensure_ascii=False, sort_keys=True)
+        id_matches = message.get("message_id") == message_id or message.get("id") == message_id or message_id in serialized
+        text_matches = text is None or message.get("content") == text or text in serialized
+        if id_matches and text_matches:
+            return message
+    raise RuntimeError(f"message {message_id} not visible with expected content")
+
+
+def assert_message_visible(result: dict[str, Any], *, message_id: str, text: str) -> None:
+    find_visible_message(result, message_id=message_id, text=text)
+
+
+def assert_message_not_visible(result: dict[str, Any], *, message_id: str) -> None:
+    for message in rust_messages(result):
+        if message.get("message_id") == message_id or message.get("id") == message_id or message_id in json.dumps(
+            message, ensure_ascii=False, sort_keys=True
         ):
-            return
-    raise RuntimeError(f"message {message_id} with expected text not visible")
+            raise RuntimeError(f"message {message_id} unexpectedly visible")
 
 
 def assert_group_visible(result: dict[str, Any], *, group_did: str) -> None:
@@ -444,6 +566,16 @@ def assert_active_member(result: dict[str, Any], *, member_did: str) -> None:
         if did == member_did and member.get("status", "active") == "active":
             return
     raise RuntimeError(f"active member {member_did} not visible in rust cli group members")
+
+
+def assert_active_member_absent(result: dict[str, Any], *, member_did: str) -> None:
+    members = ((result.get("data") or {}).get("members") or [])
+    for member in members:
+        if not isinstance(member, dict):
+            continue
+        did = member.get("member_did") or member.get("agent_did") or member.get("did")
+        if did == member_did and member.get("status", "active") == "active":
+            raise RuntimeError(f"inactive member {member_did} remained in active group inventory")
 
 
 def assert_rust_cli_fails(
@@ -486,26 +618,86 @@ def china_dev_phone() -> str:
 
 
 def smoke_rust_cli_local(args: argparse.Namespace) -> int:
+    if args.standard_https and not args.inside_netns:
+        unshare = shutil.which("unshare")
+        ip = shutil.which("ip")
+        mount = shutil.which("mount")
+        if not unshare or not ip or not mount:
+            raise RuntimeError("standard HTTPS real-CLI smoke requires unshare, ip, and mount")
+        with tempfile.TemporaryDirectory(prefix="awiki-open-local-netns-") as temporary:
+            hosts_path = Path(temporary) / "hosts"
+            shutil.copyfile("/etc/hosts", hosts_path)
+            with hosts_path.open("a", encoding="utf-8") as hosts_file:
+                hosts_file.write(f"\n{args.bind_host} {args.did_domain}\n")
+            child_command = [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "smoke-rust-cli-local",
+                "--inside-netns",
+                "--standard-https",
+                "--awiki-cli-bin",
+                str(Path(resolve_executable(args.awiki_cli_bin)).resolve()),
+                "--data-root",
+                str(Path(args.data_root).resolve()),
+                "--did-domain",
+                args.did_domain,
+                "--bind-host",
+                args.bind_host,
+                "--handle-prefix",
+                args.handle_prefix,
+                "--clean" if args.clean else "--no-clean",
+            ]
+            if args.skip_attachments:
+                child_command.append("--skip-attachments")
+            shell_program = 'mount --bind "$1" /etc/hosts && "$2" link set lo up && shift 2 && exec "$@"'
+            completed = subprocess.run(
+                [unshare, "-Urnm", "sh", "-c", shell_program, "sh", str(hosts_path), ip, *child_command],
+                cwd=Path(__file__).resolve().parents[1],
+                env=os.environ.copy(),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            sys.stdout.write(completed.stdout)
+            sys.stderr.write(completed.stderr)
+            return completed.returncode
     cli_bin = resolve_executable(args.awiki_cli_bin)
-    port = args.port or free_port()
+    port = args.port or (443 if args.standard_https else free_port())
     did_domain = args.did_domain
-    base_url = f"http://{did_domain}:{port}"
+    scheme = "https" if args.standard_https else "http"
+    base_url = f"{scheme}://{did_domain}" if args.standard_https and port == 443 else f"{scheme}://{did_domain}:{port}"
     root = Path(args.data_root) if args.data_root else Path(tempfile.mkdtemp(prefix="awiki-open-rust-cli-"))
     if args.clean and root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True, exist_ok=True)
+    ca_bundle: Path | None = None
+    ssl_certfile: Path | None = None
+    ssl_keyfile: Path | None = None
+    if args.standard_https:
+        ca_bundle, ssl_certfile, ssl_keyfile = generate_test_tls_material(root, [did_domain])
+        os.environ["SSL_CERT_FILE"] = str(ca_bundle)
+        os.environ["NO_PROXY"] = "*"
+        os.environ["no_proxy"] = "*"
+        for proxy_name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+            os.environ.pop(proxy_name, None)
     home = root / "home"
     alice_workspace = root / "cli-alice"
     bob_workspace = root / "cli-bob"
     charlie_workspace = root / "cli-charlie"
     server_data = root / "server"
+    cli_version = rust_cli_json(cli_bin, alice_workspace, home, "version")
+    artifact_sha256 = hashlib.sha256(Path(cli_bin).read_bytes()).hexdigest()
+    service_private_key = generate_ed25519_private_key_pem()
     process = start_open_server(
         data_dir=server_data,
         port=port,
         domain=did_domain,
-        private_key_pem=generate_ed25519_private_key_pem(),
+        private_key_pem=service_private_key,
         resolver_map={did_domain: base_url},
         public_base_url=base_url,
+        bind_host=args.bind_host,
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
     )
     try:
         wait_health(base_url, process)
@@ -515,6 +707,7 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
             home,
             base_url=base_url,
             did_domain=did_domain,
+            ca_bundle=ca_bundle,
         )
         initialize_rust_cli_workspace(
             cli_bin,
@@ -522,6 +715,7 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
             home,
             base_url=base_url,
             did_domain=did_domain,
+            ca_bundle=ca_bundle,
         )
         initialize_rust_cli_workspace(
             cli_bin,
@@ -529,6 +723,7 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
             home,
             base_url=base_url,
             did_domain=did_domain,
+            ca_bundle=ca_bundle,
         )
         prefix = args.handle_prefix
         alice_handle = unique_handle(f"{prefix}-alice")
@@ -580,10 +775,114 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
         direct_text = "hello from rust cli local smoke"
         direct_send = rust_cli_json(cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did, "--text", direct_text)
         direct_message_id = rust_message_id(direct_send)
+        direct_text_two = "second unread message for batch mark-read"
+        direct_message_two = rust_message_id(
+            rust_cli_json(cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did, "--text", direct_text_two)
+        )
+        direct_text_three = "third unread message for batch mark-read"
+        direct_message_three = rust_message_id(
+            rust_cli_json(cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did, "--text", direct_text_three)
+        )
         bob_inbox = rust_cli_json(cli_bin, bob_workspace, home, "msg", "inbox", "--scope", "direct", "--limit", "10")
-        bob_history = rust_cli_json(cli_bin, bob_workspace, home, "msg", "history", "--with", alice_did, "--limit", "10")
+        bob_history = retry_rust_cli_json(cli_bin, bob_workspace, home, "msg", "history", "--with", alice_did, "--limit", "10")
         assert_message_visible(bob_inbox, message_id=direct_message_id, text=direct_text)
         assert_message_visible(bob_history, message_id=direct_message_id, text=direct_text)
+        bob_unread = rust_cli_json(cli_bin, bob_workspace, home, "msg", "inbox", "--scope", "direct", "--unread", "--limit", "10")
+        visible_direct = find_visible_message(bob_unread, message_id=direct_message_id, text=direct_text)
+        find_visible_message(bob_unread, message_id=direct_message_two, text=direct_text_two)
+        find_visible_message(bob_unread, message_id=direct_message_three, text=direct_text_three)
+        visible_direct_id = visible_direct.get("id") or visible_direct.get("message_id")
+        if not isinstance(visible_direct_id, str) or not visible_direct_id:
+            raise RuntimeError("rust cli unread message missing a mark-read id")
+        rust_cli_json(cli_bin, bob_workspace, home, "msg", "mark-read", visible_direct_id)
+        rust_cli_json(cli_bin, bob_workspace, home, "msg", "mark-read", visible_direct_id)
+        bob_unread_after = rust_cli_json(
+            cli_bin, bob_workspace, home, "msg", "inbox", "--scope", "direct", "--unread", "--limit", "10"
+        )
+        assert_message_not_visible(bob_unread_after, message_id=direct_message_id)
+        find_visible_message(bob_unread_after, message_id=direct_message_two, text=direct_text_two)
+        find_visible_message(bob_unread_after, message_id=direct_message_three, text=direct_text_three)
+        rust_cli_json(cli_bin, bob_workspace, home, "msg", "mark-read", direct_message_two, direct_message_three)
+        batch_unread_after = rust_cli_json(
+            cli_bin, bob_workspace, home, "msg", "inbox", "--scope", "direct", "--unread", "--limit", "20"
+        )
+        for marked_id in (direct_message_id, direct_message_two, direct_message_three):
+            assert_message_not_visible(batch_unread_after, message_id=marked_id)
+        marked_history = retry_rust_cli_json(
+            cli_bin, bob_workspace, home, "msg", "history", "--with", alice_did, "--limit", "20"
+        )
+        for marked_id in (direct_message_id, direct_message_two, direct_message_three):
+            marked = find_visible_message(marked_history, message_id=marked_id)
+            if marked.get("is_read") is not True:
+                raise RuntimeError(f"rust cli history did not project is_read=true for {marked_id}")
+        page_mark_text = "message read through inbox --mark-read"
+        page_mark_id = rust_message_id(
+            rust_cli_json(cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did, "--text", page_mark_text)
+        )
+        page_unread_before = rust_cli_json(
+            cli_bin, bob_workspace, home, "msg", "inbox", "--scope", "direct", "--unread", "--limit", "20"
+        )
+        page_visible = find_visible_message(page_unread_before, message_id=page_mark_id, text=page_mark_text)
+        page_visible_id = page_visible.get("id") or page_visible.get("message_id")
+        if not isinstance(page_visible_id, str) or not page_visible_id:
+            raise RuntimeError("rust cli page mark-read message missing local id")
+        assert_rust_cli_fails(
+            cli_bin, bob_workspace, home, "msg", "inbox", "--scope", "direct",
+            "--unread", "--mark-read", "--limit", "20", expected="inbox-mark-read-side-effect",
+        )
+        rust_cli_json(cli_bin, bob_workspace, home, "msg", "mark-read", page_visible_id)
+        page_unread_after = rust_cli_json(
+            cli_bin, bob_workspace, home, "msg", "inbox", "--scope", "direct",
+            "--unread", "--limit", "20",
+        )
+        assert_message_not_visible(page_unread_after, message_id=page_mark_id)
+        assert_rust_cli_fails(
+            cli_bin, charlie_workspace, home, "msg", "mark-read", direct_message_id, expected=None
+        )
+
+        attachment_source = root / "attachment-source.bin"
+        attachment_bytes = b"awiki-open-server-cli-attachment\x00\xff\x10"
+        attachment_source.write_bytes(attachment_bytes)
+        if not args.skip_attachments:
+            direct_attachment = rust_cli_json(
+                cli_bin,
+                alice_workspace,
+                home,
+                "msg",
+                "send",
+                "--to",
+                bob_did,
+                "--text",
+                "direct attachment caption",
+                "--file",
+                str(attachment_source),
+                "--mime-type",
+                "application/octet-stream",
+                "--secure",
+                "off",
+            )
+            direct_attachment_id = rust_message_id(direct_attachment)
+            direct_attachment_inbox = rust_cli_json(
+                cli_bin, bob_workspace, home, "msg", "inbox", "--scope", "direct", "--limit", "20"
+            )
+            find_visible_message(direct_attachment_inbox, message_id=direct_attachment_id, text="direct attachment caption")
+            direct_download = root / "direct-attachment-download.bin"
+            rust_cli_json(
+                cli_bin,
+                bob_workspace,
+                home,
+                "msg",
+                "attachment",
+                "download",
+                "--with",
+                alice_handle,
+                "--message-id",
+                direct_attachment_id,
+                "--output",
+                str(direct_download),
+            )
+            if direct_download.read_bytes() != attachment_bytes:
+                raise RuntimeError("rust cli Direct attachment download differs from source bytes")
 
         group_name = f"Rust CLI Group {uuid.uuid4().hex[:8]}"
         created_group = rust_cli_json(
@@ -643,6 +942,34 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
 
         rust_cli_json(cli_bin, charlie_workspace, home, "group", "join", "--group", group_did)
 
+        members = rust_cli_json(cli_bin, alice_workspace, home, "group", "members", "--group", group_did, "--limit", "100")
+        for member_did in (alice_did, bob_did, charlie_did):
+            assert_active_member(members, member_did=member_did)
+        members_page_one = rust_cli_json(
+            cli_bin, alice_workspace, home, "group", "members", "--group", group_did, "--limit", "1"
+        )
+        page_one_data = members_page_one.get("data") if isinstance(members_page_one.get("data"), dict) else {}
+        page_one_members = page_one_data.get("members")
+        members_cursor = page_one_data.get("next_cursor") or page_one_data.get("cursor")
+        if not isinstance(page_one_members, list) or len(page_one_members) != 1 or not isinstance(members_cursor, str) or not members_cursor:
+            raise RuntimeError("rust cli group members first page did not expose one member and a next cursor")
+        members_page_two = rust_cli_json(
+            cli_bin,
+            alice_workspace,
+            home,
+            "group",
+            "members",
+            "--group",
+            group_did,
+            "--limit",
+            "1",
+            "--cursor",
+            members_cursor,
+        )
+        page_two_members = (((members_page_two.get("data") or {}).get("members")) or [])
+        if len(page_two_members) != 1 or page_two_members[0] == page_one_members[0]:
+            raise RuntimeError("rust cli group members cursor did not advance to a distinct member")
+
         alice_group_text = "hello group from rust cli owner"
         alice_client_message_id = f"msg-{uuid.uuid4().hex}"
         alice_group_send = rust_cli_json(
@@ -692,7 +1019,113 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
                 text=bob_group_text,
             )
 
+        if not args.skip_attachments:
+            group_attachment = rust_cli_json(
+                cli_bin,
+                alice_workspace,
+                home,
+                "msg",
+                "send",
+                "--group",
+                group_did,
+                "--text",
+                "group attachment caption",
+                "--file",
+                str(attachment_source),
+                "--mime-type",
+                "application/octet-stream",
+                "--secure",
+                "off",
+            )
+            group_attachment_id = rust_message_id(group_attachment)
+            bob_group_attachments = rust_cli_json(
+                cli_bin, bob_workspace, home, "group", "messages", "--group", group_did, "--limit", "50"
+            )
+            find_visible_message(bob_group_attachments, message_id=group_attachment_id, text="group attachment caption")
+            group_download = root / "group-attachment-download.bin"
+            rust_cli_json(
+                cli_bin,
+                bob_workspace,
+                home,
+                "msg",
+                "attachment",
+                "download",
+                "--group",
+                group_did,
+                "--message-id",
+                group_attachment_id,
+                "--output",
+                str(group_download),
+            )
+            if group_download.read_bytes() != attachment_bytes:
+                raise RuntimeError("rust cli Group attachment download differs from source bytes")
+
+        stop_process(process)
+        process = start_open_server(
+            data_dir=server_data,
+            port=port,
+            domain=did_domain,
+            private_key_pem=service_private_key,
+            resolver_map={did_domain: base_url},
+            public_base_url=base_url,
+            bind_host=args.bind_host,
+            ssl_certfile=ssl_certfile,
+            ssl_keyfile=ssl_keyfile,
+        )
+        wait_health(base_url, process)
+        restarted_history = retry_rust_cli_json(
+            cli_bin, bob_workspace, home, "msg", "history", "--with", alice_did, "--limit", "20"
+        )
+        assert_message_visible(restarted_history, message_id=direct_message_id, text=direct_text)
+        restarted_unread = rust_cli_json(
+            cli_bin, bob_workspace, home, "msg", "inbox", "--scope", "direct", "--unread", "--limit", "20"
+        )
+        assert_message_not_visible(restarted_unread, message_id=direct_message_id)
+        restarted_group = rust_cli_json(cli_bin, alice_workspace, home, "group", "get", "--group", group_did)
+        if rust_group_did(restarted_group) != group_did:
+            raise RuntimeError("rust cli group did not survive OpenServer restart")
+        restarted_members = rust_cli_json(
+            cli_bin, alice_workspace, home, "group", "members", "--group", group_did, "--limit", "100"
+        )
+        for member_did in (alice_did, bob_did, charlie_did):
+            assert_active_member(restarted_members, member_did=member_did)
+        restarted_messages = rust_cli_json(
+            cli_bin, bob_workspace, home, "group", "messages", "--group", group_did, "--limit", "50"
+        )
+        assert_message_visible(restarted_messages, message_id=alice_group_message_id, text=alice_group_text)
+        assert_message_visible(restarted_messages, message_id=bob_group_message_id, text=bob_group_text)
+        if not args.skip_attachments:
+            restarted_group_download = root / "group-attachment-download-after-restart.bin"
+            rust_cli_json(
+                cli_bin,
+                bob_workspace,
+                home,
+                "msg",
+                "attachment",
+                "download",
+                "--group",
+                group_did,
+                "--message-id",
+                group_attachment_id,
+                "--output",
+                str(restarted_group_download),
+            )
+            if restarted_group_download.read_bytes() != attachment_bytes:
+                raise RuntimeError("rust cli Group attachment download after restart differs from source bytes")
+
         rust_cli_json(cli_bin, charlie_workspace, home, "group", "leave", "--group", group_did)
+        after_leave_members = rust_cli_json(
+            cli_bin, alice_workspace, home, "group", "members", "--group", group_did, "--limit", "100"
+        )
+        assert_active_member_absent(after_leave_members, member_did=charlie_did)
+        assert_rust_cli_fails(
+            cli_bin, charlie_workspace, home, "group", "members", "--group", group_did, "--limit", "10", expected=None
+        )
+        if not args.skip_attachments:
+            assert_rust_cli_fails(
+                cli_bin, charlie_workspace, home, "msg", "attachment", "download", "--group", group_did,
+                "--message-id", group_attachment_id, "--output", str(root / "charlie-after-leave.bin"), expected=None,
+            )
         assert_rust_cli_fails(
             cli_bin,
             charlie_workspace,
@@ -716,6 +1149,18 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
             "--member",
             bob_did,
         )
+        after_remove_members = rust_cli_json(
+            cli_bin, alice_workspace, home, "group", "members", "--group", group_did, "--limit", "100"
+        )
+        assert_active_member_absent(after_remove_members, member_did=bob_did)
+        assert_rust_cli_fails(
+            cli_bin, bob_workspace, home, "group", "members", "--group", group_did, "--limit", "10", expected=None
+        )
+        if not args.skip_attachments:
+            assert_rust_cli_fails(
+                cli_bin, bob_workspace, home, "msg", "attachment", "download", "--group", group_did,
+                "--message-id", group_attachment_id, "--output", str(root / "bob-after-remove.bin"), expected=None,
+            )
         assert_rust_cli_fails(
             cli_bin,
             bob_workspace,
@@ -756,15 +1201,28 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
             "base_url": base_url,
             "did_domain": did_domain,
             "cli_bin": cli_bin,
+            "cli_artifact_sha256": artifact_sha256,
+            "cli_version": cli_version.get("data"),
+            "open_server": open_server_provenance(),
             "data_root": str(root),
             "alice": {"handle": alice_handle, "did": alice_did},
             "bob": {"handle": bob_handle, "did": bob_did},
             "charlie": {"handle": charlie_handle, "did": charlie_did},
             "group_did": group_did,
+            "attachment_fixture": {
+                "size": len(attachment_bytes),
+                "sha256": hashlib.sha256(attachment_bytes).hexdigest(),
+                "verified": not args.skip_attachments,
+            },
             "verified": [
                 "rust cli id register via /user-service/v1/did-auth/rpc with placeholder phone/otp CLI args; server does not run contact verification",
                 "direct msg send, inbox, and history through /im/rpc",
+                "direct single, batch, idempotent, unauthorized, and restart-persistent mark-read; page side-effect is CLI-declared unsupported",
+                *([] if args.skip_attachments else ["direct and group attachment send/download with byte-for-byte verification"]),
                 "hosted group create/get/list/add/update/join/send/messages/leave/remove lifecycle",
+                "group members inventory, leave/remove convergence, and non-member denial through the real CLI",
+                "group members cursor pagination through the real CLI",
+                "server restart persistence for messages, read state, groups, members, and attachment objects",
                 "group client-message-id preservation and post-leave/post-remove authorization denial",
                 "people follow/status/following/followers through /user-service/v1/did/relationships/rpc",
                 "site root/page commands through /user-service/v1/site/rpc",
@@ -772,8 +1230,507 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
         }
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+    except Exception as exc:
+        stop_process(process)
+        stderr_tail = process.stderr.read()[-8000:] if process.stderr is not None else ""
+        raise RuntimeError(f"{exc}; open_server_stderr={stderr_tail}") from exc
     finally:
         stop_process(process)
+
+
+def _json_values_for_key(value: Any, key: str) -> list[Any]:
+    found: list[Any] = []
+    if isinstance(value, dict):
+        for item_key, item_value in value.items():
+            if item_key == key:
+                found.append(item_value)
+            found.extend(_json_values_for_key(item_value, key))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(_json_values_for_key(item, key))
+    return found
+
+
+def wait_rust_listener_ready(
+    cli_bin: str,
+    workspace: Path,
+    home: Path,
+    process: subprocess.Popen,
+    *,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout_seconds
+    last_status: dict[str, Any] | None = None
+    last_error = ""
+    while time.time() < deadline:
+        if process.poll() is not None:
+            stdout = process.stdout.read()[-4000:] if process.stdout is not None else ""
+            stderr = process.stderr.read()[-4000:] if process.stderr is not None else ""
+            raise RuntimeError(
+                "rust cli listener exited before ready: "
+                + json.dumps({"returncode": process.returncode, "stdout": stdout, "stderr": stderr}, ensure_ascii=False)
+            )
+        try:
+            last_status = rust_cli_json(cli_bin, workspace, home, "runtime", "listener", "status")
+            connected = True in _json_values_for_key(last_status, "connected")
+            v2_negotiated = True in _json_values_for_key(last_status, "v2_subprotocol_negotiated")
+            v2_bootstrap = True in _json_values_for_key(last_status, "v2_bootstrap_completed")
+            protocols = _json_values_for_key(last_status, "last_reconcile_protocol")
+            legacy_values = _json_values_for_key(last_status, "legacy_sync_used")
+            if connected and v2_negotiated and v2_bootstrap and "sync_v2" in protocols and False in legacy_values:
+                return last_status
+            last_error = "listener status not ready"
+        except Exception as exc:
+            last_error = str(exc)
+        time.sleep(0.2)
+    raise RuntimeError(
+        "rust cli listener did not reach reliable sync v2 readiness: "
+        + json.dumps({"error": last_error, "last_status": last_status}, ensure_ascii=False)
+    )
+
+
+def wait_file_contains(path: Path, needles: list[str], *, timeout_seconds: float = 30.0) -> str:
+    deadline = time.time() + timeout_seconds
+    text = ""
+    while time.time() < deadline:
+        if path.exists():
+            text = path.read_text(encoding="utf-8")
+            if all(needle in text for needle in needles):
+                return text
+        time.sleep(0.2)
+    raise RuntimeError(
+        "host-notify file did not contain expected durable identifiers: "
+        + json.dumps({"path": str(path), "needles": needles, "tail": text[-4000:]}, ensure_ascii=False)
+    )
+
+
+def retry_rust_cli_json(
+    cli_bin: str,
+    workspace: Path,
+    home: Path,
+    *args: str,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout_seconds
+    last_error = ""
+    while time.time() < deadline:
+        try:
+            return rust_cli_json(cli_bin, workspace, home, *args)
+        except Exception as exc:
+            last_error = str(exc)
+            time.sleep(0.25)
+    raise RuntimeError(f"rust cli command did not become ready: {last_error}")
+
+
+def wait_rust_message_visible(
+    cli_bin: str,
+    workspace: Path,
+    home: Path,
+    *args: str,
+    message_id: str,
+    text_value: str,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout_seconds
+    last_error = ""
+    while time.time() < deadline:
+        try:
+            result = rust_cli_json(cli_bin, workspace, home, *args)
+            try:
+                find_visible_message(result, message_id=message_id, text=text_value)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"{exc}; response={json.dumps(result, ensure_ascii=False)}"
+                ) from exc
+            return result
+        except Exception as exc:
+            last_error = str(exc)
+            time.sleep(0.25)
+    raise RuntimeError(f"message {message_id} did not become visible through real CLI: {last_error}")
+
+
+def smoke_rust_cli_realtime_restart(args: argparse.Namespace) -> int:
+    cli_bin = resolve_executable(args.awiki_cli_bin)
+    port = args.port or free_port()
+    did_domain = args.did_domain
+    base_url = f"http://{did_domain}:{port}"
+    root = Path(args.data_root)
+    if args.clean and root.exists():
+        shutil.rmtree(root)
+    root.mkdir(parents=True, exist_ok=True)
+    home = root / "home"
+    alice_workspace = root / "cli-alice"
+    bob_workspace = root / "cli-bob"
+    server_data = root / "server"
+    service_private_key = generate_ed25519_private_key_pem()
+    cli_version = rust_cli_json(cli_bin, alice_workspace, home, "version")
+    artifact_sha256 = hashlib.sha256(Path(cli_bin).read_bytes()).hexdigest()
+    server_boots: list[dict[str, Any]] = []
+    listener_boots: list[dict[str, Any]] = []
+    process = start_open_server(
+        data_dir=server_data,
+        port=port,
+        domain=did_domain,
+        private_key_pem=service_private_key,
+        resolver_map={did_domain: base_url},
+        public_base_url=base_url,
+    )
+    server_boots.append({"boot_id": uuid.uuid4().hex, "pid": process.pid})
+    listener: subprocess.Popen | None = None
+    try:
+        wait_health(base_url, process)
+        for workspace in (alice_workspace, bob_workspace):
+            initialize_rust_cli_workspace(
+                cli_bin, workspace, home, base_url=base_url, did_domain=did_domain
+            )
+        alice_handle = unique_handle("realtime-alice")
+        bob_handle = unique_handle("realtime-bob")
+        alice_did = rust_register_did(
+            rust_cli_json(
+                cli_bin, alice_workspace, home, "id", "register", "--handle", alice_handle,
+                "--phone", china_dev_phone(), "--otp", "123456",
+            )
+        )
+        bob_did = rust_register_did(
+            rust_cli_json(
+                cli_bin, bob_workspace, home, "id", "register", "--handle", bob_handle,
+                "--phone", china_dev_phone(), "--otp", "123456",
+            )
+        )
+        created_group = rust_cli_json(
+            cli_bin, alice_workspace, home, "group", "create", "--name", "Realtime Restart Gate",
+            "--discoverability", "private", "--admission-mode", "admin-add", "--max-members", "10",
+        )
+        group_did = rust_group_did(created_group)
+        rust_cli_json(
+            cli_bin, alice_workspace, home, "group", "add", "--group", group_did,
+            "--member", bob_did, "--role", "member",
+        )
+
+        rust_cli_json(
+            cli_bin, bob_workspace, home, "runtime", "listener", "config", "set",
+            "--enabled=false", "--auto-install=false", "--auto-start=false",
+        )
+        rust_cli_json(cli_bin, bob_workspace, home, "runtime", "mode", "set", "websocket")
+        rust_cli_json(cli_bin, bob_workspace, home, "runtime", "host-notify", "config", "set", "--sink", "file")
+        rust_cli_json(cli_bin, bob_workspace, home, "runtime", "host-notify", "enable")
+        rust_cli_json(
+            cli_bin, bob_workspace, home, "runtime", "listener", "config", "set",
+            "--enabled=true", "--auto-install=false", "--auto-start=false",
+        )
+        notify_file = bob_workspace / "tenants" / "local" / "logs" / "host-notify.events.jsonl"
+
+        listener = start_rust_cli_listener(cli_bin, bob_workspace, home)
+        listener_boots.append({"boot_id": uuid.uuid4().hex, "pid": listener.pid})
+        first_status = wait_rust_listener_ready(cli_bin, bob_workspace, home, listener)
+        direct_one = rust_message_id(
+            rust_cli_json(
+                cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did,
+                "--text", "realtime direct while connected", "--secure", "off",
+            )
+        )
+        group_one = rust_message_id(
+            rust_cli_json(
+                cli_bin, alice_workspace, home, "msg", "send", "--group", group_did,
+                "--text", "realtime group while connected", "--secure", "off",
+            )
+        )
+        wait_file_contains(notify_file, [direct_one, group_one])
+
+        stop_process(listener)
+        listener = None
+        direct_offline = rust_message_id(
+            rust_cli_json(
+                cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did,
+                "--text", "direct while listener stopped", "--secure", "off",
+            )
+        )
+        group_offline = rust_message_id(
+            rust_cli_json(
+                cli_bin, alice_workspace, home, "msg", "send", "--group", group_did,
+                "--text", "group while listener stopped", "--secure", "off",
+            )
+        )
+        listener = start_rust_cli_listener(cli_bin, bob_workspace, home)
+        listener_boots.append({"boot_id": uuid.uuid4().hex, "pid": listener.pid})
+        second_status = wait_rust_listener_ready(cli_bin, bob_workspace, home, listener)
+        wait_file_contains(notify_file, [direct_offline, group_offline])
+
+        stop_process(process)
+        process = start_open_server(
+            data_dir=server_data,
+            port=port,
+            domain=did_domain,
+            private_key_pem=service_private_key,
+            resolver_map={did_domain: base_url},
+            public_base_url=base_url,
+        )
+        server_boots.append({"boot_id": uuid.uuid4().hex, "pid": process.pid})
+        wait_health(base_url, process)
+        # The foreground entry is deliberately supervised by this test instead
+        # of installing a system service. Restart it after the server outage so
+        # the recovery path matches the production service-manager contract.
+        stop_process(listener)
+        listener = start_rust_cli_listener(cli_bin, bob_workspace, home)
+        listener_boots.append({"boot_id": uuid.uuid4().hex, "pid": listener.pid})
+        third_status = wait_rust_listener_ready(cli_bin, bob_workspace, home, listener, timeout_seconds=45.0)
+        direct_after_restart = rust_message_id(
+            rust_cli_json(
+                cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did,
+                "--text", "direct after OpenServer restart", "--secure", "off",
+            )
+        )
+        wait_file_contains(notify_file, [direct_after_restart])
+
+        history = rust_cli_json(cli_bin, bob_workspace, home, "msg", "history", "--with", alice_did, "--limit", "50")
+        for message_id, text_value in (
+            (direct_one, "realtime direct while connected"),
+            (direct_offline, "direct while listener stopped"),
+            (direct_after_restart, "direct after OpenServer restart"),
+        ):
+            assert_message_visible(history, message_id=message_id, text=text_value)
+        group_messages = rust_cli_json(
+            cli_bin, bob_workspace, home, "group", "messages", "--group", group_did, "--limit", "50"
+        )
+        assert_message_visible(group_messages, message_id=group_one, text="realtime group while connected")
+        assert_message_visible(group_messages, message_id=group_offline, text="group while listener stopped")
+
+        final_status = rust_cli_json(cli_bin, bob_workspace, home, "runtime", "listener", "status")
+        if True in _json_values_for_key(final_status, "legacy_sync_used"):
+            raise RuntimeError("rust cli realtime gate used legacy sync")
+        print(json.dumps({
+            "ok": True,
+            "mode": "rust-cli-realtime-restart",
+            "base_url": base_url,
+            "cli_bin": cli_bin,
+            "cli_artifact_sha256": artifact_sha256,
+            "cli_version": cli_version.get("data"),
+            "open_server": open_server_provenance(),
+            "server_boots": server_boots,
+            "listener_boots": listener_boots,
+            "group_did": group_did,
+            "message_ids": [direct_one, group_one, direct_offline, group_offline, direct_after_restart],
+            "readiness_snapshots": [first_status.get("data"), second_status.get("data"), third_status.get("data")],
+            "verified": [
+                "foreground listener negotiated awiki.sync.changed.v2 and completed sync v2 bootstrap",
+                "Direct and Group realtime dirty hints reconciled to durable local views",
+                "listener downtime was recovered by sync v2 after foreground restart",
+                "OpenServer outage plus supervised foreground restart recovered without legacy sync fallback",
+            ],
+        }, ensure_ascii=False, indent=2))
+        return 0
+    finally:
+        if listener is not None:
+            stop_process(listener)
+        stop_process(process)
+
+
+def smoke_rust_cli_cross_domain(args: argparse.Namespace) -> int:
+    if not args.inside_netns:
+        unshare = shutil.which("unshare")
+        ip = shutil.which("ip")
+        mount = shutil.which("mount")
+        if not unshare or not ip or not mount:
+            raise RuntimeError("smoke-rust-cli-cross-domain requires unshare, ip, and mount")
+        with tempfile.TemporaryDirectory(prefix="awiki-open-cross-netns-") as temporary:
+            hosts_path = Path(temporary) / "hosts"
+            shutil.copyfile("/etc/hosts", hosts_path)
+            with hosts_path.open("a", encoding="utf-8") as hosts_file:
+                hosts_file.write(f"\n{args.source_bind_host} {args.source_domain}\n")
+                hosts_file.write(f"{args.target_bind_host} {args.target_domain}\n")
+            child_command = [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "smoke-rust-cli-cross-domain",
+                "--inside-netns",
+                "--awiki-cli-bin",
+                str(Path(resolve_executable(args.awiki_cli_bin)).resolve()),
+                "--data-root",
+                str(Path(args.data_root).resolve()),
+                "--source-domain",
+                args.source_domain,
+                "--target-domain",
+                args.target_domain,
+                "--source-bind-host",
+                args.source_bind_host,
+                "--target-bind-host",
+                args.target_bind_host,
+                "--clean" if args.clean else "--no-clean",
+            ]
+            shell_program = 'mount --bind "$1" /etc/hosts && "$2" link set lo up && shift 2 && exec "$@"'
+            completed = subprocess.run(
+                [unshare, "-Urnm", "sh", "-c", shell_program, "sh", str(hosts_path), ip, *child_command],
+                cwd=Path(__file__).resolve().parents[1],
+                env=os.environ.copy(),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            sys.stdout.write(completed.stdout)
+            sys.stderr.write(completed.stderr)
+            return completed.returncode
+    cli_bin = resolve_executable(args.awiki_cli_bin)
+    root = Path(args.data_root)
+    if args.clean and root.exists():
+        shutil.rmtree(root)
+    root.mkdir(parents=True, exist_ok=True)
+    source_domain = args.source_domain
+    target_domain = args.target_domain
+    source_base = f"https://{source_domain}"
+    target_base = f"https://{target_domain}"
+    ca_bundle, ssl_certfile, ssl_keyfile = generate_test_tls_material(root, [source_domain, target_domain])
+    os.environ["SSL_CERT_FILE"] = str(ca_bundle)
+    os.environ["NO_PROXY"] = "*"
+    os.environ["no_proxy"] = "*"
+    for proxy_name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        os.environ.pop(proxy_name, None)
+    resolver_map = {source_domain: source_base, target_domain: target_base}
+    source_key = generate_ed25519_private_key_pem()
+    target_key = generate_ed25519_private_key_pem()
+    home = root / "home"
+    alice_workspace = root / "cli-source-alice"
+    bob_workspace = root / "cli-target-bob"
+    cli_version = rust_cli_json(cli_bin, alice_workspace, home, "version")
+    artifact_sha256 = hashlib.sha256(Path(cli_bin).read_bytes()).hexdigest()
+    processes: list[subprocess.Popen] = []
+    try:
+        processes.append(start_open_server(
+            data_dir=root / "source-server", port=443, domain=source_domain,
+            private_key_pem=source_key, resolver_map=resolver_map, public_base_url=source_base,
+            bind_host=args.source_bind_host, ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile,
+        ))
+        processes.append(start_open_server(
+            data_dir=root / "target-server", port=443, domain=target_domain,
+            private_key_pem=target_key, resolver_map=resolver_map, public_base_url=target_base,
+            bind_host=args.target_bind_host, ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile,
+        ))
+        wait_health(source_base, processes[0])
+        wait_health(target_base, processes[1])
+        initialize_rust_cli_workspace(
+            cli_bin, alice_workspace, home, base_url=source_base, did_domain=source_domain, ca_bundle=ca_bundle
+        )
+        initialize_rust_cli_workspace(
+            cli_bin, bob_workspace, home, base_url=target_base, did_domain=target_domain, ca_bundle=ca_bundle
+        )
+        alice_handle = unique_handle("cross-alice")
+        bob_handle = unique_handle("cross-bob")
+        alice_did = rust_register_did(rust_cli_json(
+            cli_bin, alice_workspace, home, "id", "register", "--handle", alice_handle,
+            "--phone", china_dev_phone(), "--otp", "123456",
+        ))
+        bob_did = rust_register_did(rust_cli_json(
+            cli_bin, bob_workspace, home, "id", "register", "--handle", bob_handle,
+            "--phone", china_dev_phone(), "--otp", "123456",
+        ))
+        # Establish each single-device Sync v2 binding before creating remote
+        # events so the test exercises delta delivery rather than a late first
+        # bootstrap at the account tail.
+        rust_cli_json(cli_bin, alice_workspace, home, "msg", "inbox", "--scope", "direct", "--limit", "1")
+        rust_cli_json(cli_bin, bob_workspace, home, "msg", "inbox", "--scope", "direct", "--limit", "1")
+        source_direct_text = "plaintext Direct source to target"
+        source_direct = rust_message_id(rust_cli_json(
+            cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did,
+            "--text", source_direct_text, "--secure", "off",
+        ))
+        target_inbox = wait_rust_message_visible(
+            cli_bin, bob_workspace, home, "msg", "history", "--with", alice_did, "--limit", "20",
+            message_id=source_direct, text_value=source_direct_text,
+        )
+
+        target_direct_text = "plaintext Direct target to source"
+        target_direct = rust_message_id(rust_cli_json(
+            cli_bin, bob_workspace, home, "msg", "send", "--to", alice_did,
+            "--text", target_direct_text, "--secure", "off",
+        ))
+        source_inbox = wait_rust_message_visible(
+            cli_bin, alice_workspace, home, "msg", "history", "--with", bob_did, "--limit", "20",
+            message_id=target_direct, text_value=target_direct_text,
+        )
+
+        source_group = rust_group_did(rust_cli_json(
+            cli_bin, alice_workspace, home, "group", "create", "--name", "Source Hosted Community",
+            "--discoverability", "private", "--admission-mode", "admin-add", "--max-members", "20",
+        ))
+        rust_cli_json(
+            cli_bin, alice_workspace, home, "group", "add", "--group", source_group,
+            "--member", bob_did, "--role", "member",
+        )
+        source_group_members = retry_rust_cli_json(
+            cli_bin, bob_workspace, home, "group", "members", "--group", source_group, "--limit", "20"
+        )
+        assert_active_member(source_group_members, member_did=alice_did)
+        assert_active_member(source_group_members, member_did=bob_did)
+        source_group_text = "source-hosted group from remote Bob"
+        source_group_message = rust_message_id(rust_cli_json(
+            cli_bin, bob_workspace, home, "msg", "send", "--group", source_group,
+            "--text", source_group_text, "--secure", "off",
+        ))
+        source_group_history = wait_rust_message_visible(
+            cli_bin, alice_workspace, home, "group", "messages", "--group", source_group, "--limit", "20",
+            message_id=source_group_message, text_value=source_group_text,
+        )
+
+        target_group = rust_group_did(rust_cli_json(
+            cli_bin, bob_workspace, home, "group", "create", "--name", "Target Hosted Community",
+            "--discoverability", "private", "--admission-mode", "admin-add", "--max-members", "20",
+        ))
+        rust_cli_json(
+            cli_bin, bob_workspace, home, "group", "add", "--group", target_group,
+            "--member", alice_did, "--role", "member",
+        )
+        target_group_members = retry_rust_cli_json(
+            cli_bin, alice_workspace, home, "group", "members", "--group", target_group, "--limit", "20"
+        )
+        assert_active_member(target_group_members, member_did=alice_did)
+        assert_active_member(target_group_members, member_did=bob_did)
+        target_group_text = "target-hosted group from remote Alice"
+        target_group_message = rust_message_id(rust_cli_json(
+            cli_bin, alice_workspace, home, "msg", "send", "--group", target_group,
+            "--text", target_group_text, "--secure", "off",
+        ))
+        target_group_history = wait_rust_message_visible(
+            cli_bin, bob_workspace, home, "group", "messages", "--group", target_group, "--limit", "20",
+            message_id=target_group_message, text_value=target_group_text,
+        )
+
+        rust_cli_json(cli_bin, bob_workspace, home, "group", "leave", "--group", source_group)
+        assert_rust_cli_fails(
+            cli_bin, bob_workspace, home, "msg", "send", "--group", source_group,
+            "--text", "must fail after remote leave", "--secure", "off", expected=None,
+        )
+        rust_cli_json(
+            cli_bin, bob_workspace, home, "group", "remove", "--group", target_group,
+            "--member", alice_did,
+        )
+        assert_rust_cli_fails(
+            cli_bin, alice_workspace, home, "msg", "send", "--group", target_group,
+            "--text", "must fail after cross-domain removal", "--secure", "off", expected=None,
+        )
+
+        print(json.dumps({
+            "ok": True,
+            "mode": "rust-cli-cross-domain",
+            "cli_bin": cli_bin,
+            "cli_artifact_sha256": artifact_sha256,
+            "cli_version": cli_version.get("data"),
+            "open_server": open_server_provenance(),
+            "source": {"base_url": source_base, "domain": source_domain, "did": alice_did, "pid": processes[0].pid},
+            "target": {"base_url": target_base, "domain": target_domain, "did": bob_did, "pid": processes[1].pid},
+            "direct_message_ids": [source_direct, target_direct],
+            "groups": {"source_hosted": source_group, "target_hosted": target_group},
+            "group_message_ids": [source_group_message, target_group_message],
+            "verified": [
+                "two independent TLS OpenServer processes and real CLI workspaces",
+                "bidirectional plaintext Direct through DID discovery and signed peer requests",
+                "Community Group hosted in each domain with remote members and messages",
+                "cross-domain leave/remove authorization convergence",
+                "no E2EE or cross-domain attachment relay was exercised",
+            ],
+        }, ensure_ascii=False, indent=2))
+        return 0
+    finally:
+        for child in processes:
+            stop_process(child)
 
 
 def smoke_rust_cli_connect(args: argparse.Namespace) -> int:
@@ -1312,10 +2269,35 @@ def main(argv: list[str] | None = None) -> int:
     rust_cli.add_argument("--data-root", default="/tmp/awiki-open-server-rust-cli-local")
     rust_cli.add_argument("--did-domain", default="127.0.0.1.nip.io")
     rust_cli.add_argument("--port", type=int)
+    rust_cli.add_argument("--bind-host", default="127.0.0.1")
+    rust_cli.add_argument("--standard-https", action="store_true")
+    rust_cli.add_argument("--inside-netns", action="store_true", help=argparse.SUPPRESS)
     rust_cli.add_argument("--handle-prefix", default="rust-smoke")
+    rust_cli.add_argument("--skip-attachments", action="store_true")
     rust_cli.add_argument("--clean", dest="clean", action="store_true", default=True)
     rust_cli.add_argument("--no-clean", dest="clean", action="store_false")
     rust_cli.set_defaults(func=smoke_rust_cli_local)
+
+    rust_cli_realtime = sub.add_parser("smoke-rust-cli-realtime-restart")
+    rust_cli_realtime.add_argument("--awiki-cli-bin", default=os.environ.get("AWIKI_CLI_BIN", "awiki-cli"))
+    rust_cli_realtime.add_argument("--data-root", default="/tmp/awiki-open-server-rust-cli-realtime")
+    rust_cli_realtime.add_argument("--did-domain", default="127.0.0.1.nip.io")
+    rust_cli_realtime.add_argument("--port", type=int)
+    rust_cli_realtime.add_argument("--clean", dest="clean", action="store_true", default=True)
+    rust_cli_realtime.add_argument("--no-clean", dest="clean", action="store_false")
+    rust_cli_realtime.set_defaults(func=smoke_rust_cli_realtime_restart)
+
+    rust_cli_cross = sub.add_parser("smoke-rust-cli-cross-domain")
+    rust_cli_cross.add_argument("--awiki-cli-bin", default=os.environ.get("AWIKI_CLI_BIN", "awiki-cli"))
+    rust_cli_cross.add_argument("--data-root", default="/tmp/awiki-open-server-rust-cli-cross-domain")
+    rust_cli_cross.add_argument("--source-domain", default="source.open.test")
+    rust_cli_cross.add_argument("--target-domain", default="target.open.test")
+    rust_cli_cross.add_argument("--source-bind-host", default="127.0.0.2")
+    rust_cli_cross.add_argument("--target-bind-host", default="127.0.0.3")
+    rust_cli_cross.add_argument("--inside-netns", action="store_true", help=argparse.SUPPRESS)
+    rust_cli_cross.add_argument("--clean", dest="clean", action="store_true", default=True)
+    rust_cli_cross.add_argument("--no-clean", dest="clean", action="store_false")
+    rust_cli_cross.set_defaults(func=smoke_rust_cli_cross_domain)
 
     rust_cli_connect = sub.add_parser("smoke-rust-cli-connect")
     rust_cli_connect.add_argument("--awiki-cli-bin", default=os.environ.get("AWIKI_CLI_BIN", "awiki-cli"))

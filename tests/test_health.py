@@ -165,6 +165,41 @@ def test_im_websocket_accepts_ws_ticket(tmp_path):
     assert "checkpoint" not in notification["params"]
 
 
+def test_im_websocket_negotiates_sync_changed_v2_with_bearer_header(tmp_path):
+    app = create_app(
+        Settings(
+            data_dir=tmp_path,
+            public_base_url="http://testserver",
+            service_did="did:wba:testserver",
+            did_domain="testserver",
+            service_private_key_pem=generate_ed25519_private_key_pem(),
+        )
+    )
+    with TestClient(app) as client:
+        registered = client.post(
+            "/did-auth/rpc",
+            json={"jsonrpc": "2.0", "method": "register", "params": {"handle": "ws-v2-user"}, "id": "1"},
+        ).json()["result"]
+        with client.websocket_connect(
+            "/im/ws",
+            headers={"Authorization": f"Bearer {registered['token']}"},
+            subprotocols=["awiki.sync.changed.v2"],
+        ) as websocket:
+            assert websocket.accepted_subprotocol == "awiki.sync.changed.v2"
+            notification = websocket.receive_json()
+
+    assert notification == {
+        "jsonrpc": "2.0",
+        "method": "sync.changed",
+        "params": {"domains": ["message"], "reason": "reconnected"},
+        "sync": {
+            "schema_version": 2,
+            "account_scan_seq_hint": None,
+            "domain_versions": {},
+        },
+    }
+
+
 def test_im_websocket_receives_direct_and_group_notifications(tmp_path):
     app = create_app(
         Settings(

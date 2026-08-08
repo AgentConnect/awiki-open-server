@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 
 import httpx
 import pytest
@@ -12,6 +13,7 @@ from awiki_open_server.app.settings import Settings
 from awiki_open_server.service_identity import (
     generate_ed25519_private_key_pem,
 )
+from awiki_open_server.shared.ids import now_iso
 from tests.conftest import rpc
 from tests.helpers import origin_proof, register, register_with_key
 
@@ -387,7 +389,6 @@ async def test_attachment_download_ticket_accepts_anp_body_shape(client):
     ticket_body = {
         "attachment_id": "att-direct",
         "object_uri": object_uri,
-        "sender_did": sender_did,
         "requester_did": recipient_did,
         "message_security_profile": "transport-protected",
         "message_id": "msg-att-direct",
@@ -445,7 +446,6 @@ async def test_attachment_download_ticket_accepts_anp_body_shape(client):
     group_ticket_body = {
         "attachment_id": "att-direct",
         "object_uri": object_uri,
-        "sender_did": sender_did,
         "requester_did": recipient_did,
         "message_security_profile": "transport-protected",
         "message_id": "msg-att-group",
@@ -459,6 +459,59 @@ async def test_attachment_download_ticket_accepts_anp_body_shape(client):
         token=recipient_token,
     )
     assert group_ticket["result"]["ticket_binding"]["group_did"] == group_did
+
+    with client._transport.app.state.store.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO hosted_groups
+                (group_did, host_service_did, creator_did, profile_json, policy_json,
+                 group_state_version, group_event_seq, created_at, updated_at)
+            VALUES (?, 'did:wba:testserver', ?, '{}', '{}', 1, 1, ?, ?)
+            """,
+            (
+                "did:wba:testserver:groups:hosted-attachment",
+                sender_did,
+                now_iso(),
+                now_iso(),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO hosted_group_members (group_did, agent_did, role, status, joined_at) VALUES (?, ?, 'member', 'active', ?)",
+            ("did:wba:testserver:groups:hosted-attachment", recipient_did, now_iso()),
+        )
+        conn.execute(
+            """
+            INSERT INTO hosted_group_messages
+                (message_id, group_did, group_event_seq, sender_did, operation_id,
+                 body_json, content_type, origin_auth_json, receipt_json, created_at)
+            VALUES (?, ?, 1, ?, ?, ?, ?, '{}', '{}', ?)
+            """,
+            (
+                "msg-att-hosted-group",
+                "did:wba:testserver:groups:hosted-attachment",
+                sender_did,
+                "op-att-hosted-group",
+                json.dumps(direct_body, separators=(",", ":")),
+                "application/anp-attachment-manifest+json",
+                now_iso(),
+            ),
+        )
+        conn.commit()
+    hosted_ticket = await rpc(
+        client,
+        "/im/rpc",
+        "attachment.get_download_ticket",
+        {
+            "meta": ticket_meta,
+            "body": {
+                **group_ticket_body,
+                "message_id": "msg-att-hosted-group",
+                "group_did": "did:wba:testserver:groups:hosted-attachment",
+            },
+        },
+        token=recipient_token,
+    )
+    assert hosted_ticket["result"]["ticket_binding"]["group_did"] == "did:wba:testserver:groups:hosted-attachment"
 
     non_member = await rpc(
         client,
