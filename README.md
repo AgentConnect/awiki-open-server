@@ -35,12 +35,10 @@ AWiki Open Server is a self-contained, single-process Community Server MVP. It p
 
 ### 1. Install
 
-Use Python 3.10 or newer:
+Install `uv`, then sync the Python 3.10+ environment from the lockfile:
 
 ```bash
-python3.11 -m venv .venv
-.venv/bin/python -m pip install -U pip
-.venv/bin/python -m pip install -e '.[dev]'
+uv sync --group dev
 ```
 
 ### 2. Start a local server
@@ -50,7 +48,7 @@ PYTHONPATH=src \
 AWIKI_DATA_DIR=.awiki-open-server \
 AWIKI_PUBLIC_BASE_URL=http://127.0.0.1:8765 \
 AWIKI_DID_DOMAIN=localhost \
-.venv/bin/python -m uvicorn 'awiki_open_server.app.main:create_app' \
+uv run uvicorn 'awiki_open_server.app.main:create_app' \
   --factory --host 127.0.0.1 --port 8765
 ```
 
@@ -72,7 +70,7 @@ In another terminal, run local HTTP smoke:
 
 ```bash
 PYTHONPATH=src \
-.venv/bin/python scripts/awiki_open_cli.py smoke-local \
+uv run python scripts/awiki_open_cli.py smoke-local \
   --base-url http://127.0.0.1:8765 \
   --did-domain localhost
 ```

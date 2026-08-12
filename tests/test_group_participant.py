@@ -18,7 +18,7 @@ from awiki_open_server.service_identity import (
 )
 from awiki_open_server.shared.errors import InvalidParams
 from tests.conftest import rpc
-from tests.helpers import did_keypair_document, origin_proof, register, register_with_key, remote_direct_result
+from tests.helpers import did_keypair_document, origin_proof, register, register_with_key, remote_direct_result, runtime_capabilities
 
 @pytest.mark.asyncio
 async def test_group_participant_local_views_require_membership(client):
@@ -260,7 +260,7 @@ async def test_group_send_is_idempotent_for_same_message_and_rejects_conflicts(c
 
 
 @pytest.mark.asyncio
-async def test_public_anp_group_join_requires_origin_and_peer_signature(tmp_path, monkeypatch):
+async def test_public_anp_group_join_requires_origin_and_peer_signature(tmp_path, monkeypatch, mock_public_dns):
     local_private_key = generate_ed25519_private_key_pem()
     app = create_app(
         Settings(
@@ -290,6 +290,11 @@ async def test_public_anp_group_join_requires_origin_and_peer_signature(tmp_path
         return remote_doc
 
     monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
+    monkeypatch.setattr(
+        runtime,
+        "_http_post_json",
+        lambda *_args, **_kwargs: runtime_capabilities("did:wba:awiki.info"),
+    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as signed_client:
         group_did = "did:wba:testserver:groups:open"

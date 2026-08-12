@@ -35,12 +35,10 @@ AWiki Open Server 是一个自包含、单进程的 Community Server MVP，提�
 
 ### 1. 安装
 
-使用 Python 3.10 或更高版本：
+安装 `uv`，然后根据锁文件同步 Python 3.10+ 环境：
 
 ```bash
-python3.11 -m venv .venv
-.venv/bin/python -m pip install -U pip
-.venv/bin/python -m pip install -e '.[dev]'
+uv sync --group dev
 ```
 
 ### 2. 启动本地服务
@@ -50,7 +48,7 @@ PYTHONPATH=src \
 AWIKI_DATA_DIR=.awiki-open-server \
 AWIKI_PUBLIC_BASE_URL=http://127.0.0.1:8765 \
 AWIKI_DID_DOMAIN=localhost \
-.venv/bin/python -m uvicorn 'awiki_open_server.app.main:create_app' \
+uv run uvicorn 'awiki_open_server.app.main:create_app' \
   --factory --host 127.0.0.1 --port 8765
 ```
 
@@ -72,7 +70,7 @@ curl --noproxy '*' http://127.0.0.1:8765/healthz
 
 ```bash
 PYTHONPATH=src \
-.venv/bin/python scripts/awiki_open_cli.py smoke-local \
+uv run python scripts/awiki_open_cli.py smoke-local \
   --base-url http://127.0.0.1:8765 \
   --did-domain localhost
 ```

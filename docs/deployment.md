@@ -25,12 +25,10 @@ Adapt paths to the environment while keeping private keys/data separate from the
 
 ```bash
 cd /opt/awiki-open-server
-python3 -m venv .venv
-.venv/bin/python -m pip install -U pip
-.venv/bin/python -m pip install -e .
+uv sync --no-dev --frozen
 ```
 
-Production does not need `.[dev]` unless the server also runs tests.
+`--no-dev` excludes development dependencies, and `--frozen` requires the committed lockfile to match `pyproject.toml`.
 
 ## 4. Service DID and private key
 
@@ -75,7 +73,7 @@ Keep reverse-proxy paths, Host, WebSocket, and object URLs consistent.
 
 ```bash
 PYTHONPATH=src \
-.venv/bin/python scripts/awiki_open_cli.py verify-public \
+uv run --no-dev --frozen python scripts/awiki_open_cli.py verify-public \
   --base-url https://community.example.com \
   --did-domain community.example.com
 ```
@@ -97,4 +95,4 @@ AWIKI_ENABLE_CONTACT_VERIFICATION_COMPAT=false
 
 ## 11. Container status
 
-The public baseline is venv/systemd/Nginx. Do not publish Docker/Compose commands that do not exist or lack continuous verification. A future container path must provide a pinned base image, non-root user, persistent DB/object volume, healthcheck, service-key secret mount, migration/upgrade policy, Compose smoke, and the same secure defaults.
+The public baseline is uv-managed `.venv`/systemd/Nginx. Do not publish Docker/Compose commands that do not exist or lack continuous verification. A future container path must provide a pinned base image, non-root user, persistent DB/object volume, healthcheck, service-key secret mount, migration/upgrade policy, Compose smoke, and the same secure defaults.

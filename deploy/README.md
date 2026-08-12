@@ -42,13 +42,12 @@ That command verifies:
 ## Deployment Checklist
 
 1. Install the repository under a release path such as `/opt/awiki-open-server`.
-2. Create a Python virtual environment, then install the app so pinned
-   dependencies, including `anp==0.9.2`, are installed:
+2. Sync the locked production environment so pinned dependencies, including
+   `anp==0.9.2`, are installed:
 
    ```bash
    cd /opt/awiki-open-server
-   python3 -m venv .venv
-   .venv/bin/python -m pip install -e .
+   uv sync --no-dev --frozen
    ```
 
 3. Create a private env file from `deploy/awiki-open-server.env.example`.
@@ -89,5 +88,5 @@ process loads the sibling ANP SDK checkout first:
 ```
 
 This was verified to load ANP SDK `0.9.2`. A cleaner production deployment can
-switch back to `.venv/bin/python` once `pip install -e .` can install
-`anp==0.9.2` normally.
+switch back to the uv-managed `.venv/bin/python` once `uv sync --no-dev --frozen`
+can install `anp==0.9.2` normally.

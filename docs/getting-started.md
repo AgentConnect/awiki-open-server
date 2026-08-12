@@ -8,27 +8,25 @@ This guide starts a fully local Community Server, checks health, runs ASGI or HT
 
 ## 2. Environment
 
-Use Python 3.10+, venv/pip, and a local port. Development tests use `httpx`, `pytest`, and `pytest-asyncio` from `.[dev]`.
+Use Python 3.10+, `uv`, and a local port. Development tests use the locked `dev` dependency group.
 
 ```bash
-python3 --version
+uv --version
 ```
 
-Use an explicit interpreter such as `python3.11` when the system Python is older.
+The committed `.python-version` selects Python 3.10; `uv` can provision it when needed.
 
 ## 3. Install
 
 ```bash
-python3.11 -m venv .venv
-.venv/bin/python -m pip install -U pip
-.venv/bin/python -m pip install -e '.[dev]'
+uv sync --group dev
 ```
 
 The dependency set pins ANP Python SDK `anp==0.9.2`; the adapter fails fast on another version. In a controlled development environment only, a sibling checkout may be used explicitly:
 
 ```bash
 PYTHONPATH=../anp/anp:src \
-.venv/bin/python -m pytest tests -q
+uv run pytest tests -q
 ```
 
 This is not a public-deployment default.
@@ -40,7 +38,7 @@ PYTHONPATH=src \
 AWIKI_DATA_DIR=.awiki-open-server \
 AWIKI_PUBLIC_BASE_URL=http://127.0.0.1:8765 \
 AWIKI_DID_DOMAIN=localhost \
-.venv/bin/python -m uvicorn 'awiki_open_server.app.main:create_app' \
+uv run uvicorn 'awiki_open_server.app.main:create_app' \
   --factory --host 127.0.0.1 --port 8765
 ```
 
@@ -64,7 +62,7 @@ Run core local flows without Uvicorn:
 
 ```bash
 PYTHONPATH=src \
-.venv/bin/python scripts/awiki_open_cli.py smoke-asgi \
+uv run python scripts/awiki_open_cli.py smoke-asgi \
   --data-dir /tmp/awiki-open-server-cli-asgi
 ```
 
@@ -72,7 +70,7 @@ With the HTTP service running:
 
 ```bash
 PYTHONPATH=src \
-.venv/bin/python scripts/awiki_open_cli.py smoke-local \
+uv run python scripts/awiki_open_cli.py smoke-local \
   --base-url http://127.0.0.1:8765 \
   --did-domain localhost
 ```
@@ -81,7 +79,7 @@ Start two isolated services and verify DID discovery, origin proof, service HTTP
 
 ```bash
 PYTHONPATH=src \
-.venv/bin/python scripts/awiki_open_cli.py smoke-cross-domain-local \
+uv run python scripts/awiki_open_cli.py smoke-cross-domain-local \
   --data-root /tmp/awiki-open-server-cross-domain-local \
   --clean
 ```
@@ -91,7 +89,7 @@ This loopback resolver-map check is a local protocol gate, not a replacement for
 ## 7. Run tests
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m pytest tests -q
+PYTHONPATH=src uv run pytest tests -q
 ```
 
 Focused areas cover the ANP SDK/signatures, routes, User Service compatibility, Direct/Group/Attachment, Sync/Read State, and guarded public-deployment system tests.
@@ -116,7 +114,7 @@ First run the clean-workspace connection-and-write gate. It verifies tenant conf
 
 ```bash
 PYTHONPATH=../anp/anp:src \
-.venv/bin/python scripts/awiki_open_cli.py smoke-rust-cli-connect \
+uv run python scripts/awiki_open_cli.py smoke-rust-cli-connect \
   --awiki-cli-bin /path/to/pinned/awiki-cli \
   --data-root /tmp/awiki-open-server-rust-cli-connect \
   --clean
@@ -126,16 +124,16 @@ Then run the complete local, Realtime/restart, and two-domain gates:
 
 ```bash
 PYTHONPATH=../anp/anp:src \
-.venv/bin/python scripts/awiki_open_cli.py smoke-rust-cli-local \
+uv run python scripts/awiki_open_cli.py smoke-rust-cli-local \
   --awiki-cli-bin /path/to/awiki-cli \
   --data-root /tmp/awiki-open-server-rust-cli-local \
   --standard-https \
   --clean
 
-PYTHONPATH=../anp/anp:src .venv/bin/python scripts/awiki_open_cli.py \
+PYTHONPATH=../anp/anp:src uv run python scripts/awiki_open_cli.py \
   smoke-rust-cli-realtime-restart --awiki-cli-bin /path/to/awiki-cli --clean
 
-PYTHONPATH=../anp/anp:src .venv/bin/python scripts/awiki_open_cli.py \
+PYTHONPATH=../anp/anp:src uv run python scripts/awiki_open_cli.py \
   smoke-rust-cli-cross-domain --awiki-cli-bin /path/to/awiki-cli --clean
 ```
 

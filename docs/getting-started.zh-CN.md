@@ -15,22 +15,20 @@
 ## 2. 环境
 
 - Python 3.10+；
-- venv/pip；
+- `uv`；
 - 本地端口；
-- 开发测试需要 `httpx`、`pytest` 和 `pytest-asyncio`（包含在 `.[dev]`）。
+- 开发测试使用锁定的 `dev` 依赖组，其中包含 `httpx`、`pytest` 和 `pytest-asyncio`。
 
 ```bash
-python3 --version
+uv --version
 ```
 
-如果系统 Python 较旧，使用显式解释器，例如 `python3.11`。
+仓库提交的 `.python-version` 选择 Python 3.10；需要时 `uv` 可以自动准备该解释器。
 
 ## 3. 安装
 
 ```bash
-python3.11 -m venv .venv
-.venv/bin/python -m pip install -U pip
-.venv/bin/python -m pip install -e '.[dev]'
+uv sync --group dev
 ```
 
 当前依赖固定 ANP Python SDK `anp==0.9.2`。Adapter 会在加载到其他版本时 fail fast。
@@ -39,7 +37,7 @@ python3.11 -m venv .venv
 
 ```bash
 PYTHONPATH=../anp/anp:src \
-.venv/bin/python -m pytest tests -q
+uv run pytest tests -q
 ```
 
 这只适用于受控开发环境，不应成为公共部署默认方案。
@@ -51,7 +49,7 @@ PYTHONPATH=src \
 AWIKI_DATA_DIR=.awiki-open-server \
 AWIKI_PUBLIC_BASE_URL=http://127.0.0.1:8765 \
 AWIKI_DID_DOMAIN=localhost \
-.venv/bin/python -m uvicorn 'awiki_open_server.app.main:create_app' \
+uv run uvicorn 'awiki_open_server.app.main:create_app' \
   --factory --host 127.0.0.1 --port 8765
 ```
 
@@ -77,7 +75,7 @@ curl --noproxy '*' http://127.0.0.1:8765/healthz
 
 ```bash
 PYTHONPATH=src \
-.venv/bin/python scripts/awiki_open_cli.py smoke-asgi \
+uv run python scripts/awiki_open_cli.py smoke-asgi \
   --data-dir /tmp/awiki-open-server-cli-asgi
 ```
 
@@ -87,7 +85,7 @@ PYTHONPATH=src \
 
 ```bash
 PYTHONPATH=src \
-.venv/bin/python scripts/awiki_open_cli.py smoke-local \
+uv run python scripts/awiki_open_cli.py smoke-local \
   --base-url http://127.0.0.1:8765 \
   --did-domain localhost
 ```
@@ -98,7 +96,7 @@ PYTHONPATH=src \
 
 ```bash
 PYTHONPATH=src \
-.venv/bin/python scripts/awiki_open_cli.py smoke-cross-domain-local \
+uv run python scripts/awiki_open_cli.py smoke-cross-domain-local \
   --data-root /tmp/awiki-open-server-cross-domain-local \
   --clean
 ```
@@ -108,7 +106,7 @@ PYTHONPATH=src \
 ## 7. 运行测试
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m pytest tests -q
+PYTHONPATH=src uv run pytest tests -q
 ```
 
 重点区域：
@@ -144,7 +142,7 @@ awiki-cli init
 
 ```bash
 PYTHONPATH=../anp/anp:src \
-.venv/bin/python scripts/awiki_open_cli.py smoke-rust-cli-connect \
+uv run python scripts/awiki_open_cli.py smoke-rust-cli-connect \
   --awiki-cli-bin /path/to/pinned/awiki-cli \
   --data-root /tmp/awiki-open-server-rust-cli-connect \
   --clean
@@ -154,7 +152,7 @@ PYTHONPATH=../anp/anp:src \
 
 ```bash
 PYTHONPATH=../anp/anp:src \
-.venv/bin/python scripts/awiki_open_cli.py smoke-rust-cli-local \
+uv run python scripts/awiki_open_cli.py smoke-rust-cli-local \
   --awiki-cli-bin /path/to/awiki-cli \
   --data-root /tmp/awiki-open-server-rust-cli-local \
   --standard-https \
@@ -164,10 +162,10 @@ PYTHONPATH=../anp/anp:src \
 继续运行 foreground Realtime/restart 和双域 Gate：
 
 ```bash
-PYTHONPATH=../anp/anp:src .venv/bin/python scripts/awiki_open_cli.py \
+PYTHONPATH=../anp/anp:src uv run python scripts/awiki_open_cli.py \
   smoke-rust-cli-realtime-restart --awiki-cli-bin /path/to/awiki-cli --clean
 
-PYTHONPATH=../anp/anp:src .venv/bin/python scripts/awiki_open_cli.py \
+PYTHONPATH=../anp/anp:src uv run python scripts/awiki_open_cli.py \
   smoke-rust-cli-cross-domain --awiki-cli-bin /path/to/awiki-cli --clean
 ```
 
