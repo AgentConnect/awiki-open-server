@@ -77,7 +77,7 @@ Local member -> local Open Server verifies origin proof
 
 ```bash
 PYTHONPATH=src \
-.venv/bin/python scripts/awiki_open_cli.py smoke-cross-domain-local \
+uv run python scripts/awiki_open_cli.py smoke-cross-domain-local \
   --data-root /tmp/awiki-open-server-cross-domain-local \
   --clean
 ```
@@ -88,7 +88,7 @@ This starts two isolated Uvicorn processes with separate SQLite stores, service 
 
 ```bash
 PYTHONPATH=src \
-.venv/bin/python scripts/awiki_open_cli.py verify-public \
+uv run python scripts/awiki_open_cli.py verify-public \
   --base-url https://community.example.com \
   --did-domain community.example.com
 ```

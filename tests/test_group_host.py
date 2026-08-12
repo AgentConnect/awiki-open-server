@@ -758,7 +758,7 @@ async def test_handle_backed_member_rebind_revokes_the_previous_did(client, monk
 
 
 @pytest.mark.asyncio
-async def test_public_group_send_requires_peer_service_bound_to_sender_did(tmp_path, monkeypatch):
+async def test_public_group_send_requires_peer_service_bound_to_sender_did(tmp_path, monkeypatch, mock_public_dns):
     app = create_app(
         Settings(
             data_dir=tmp_path,

@@ -15,24 +15,22 @@ Thank you for improving AWiki Open Server. The project intentionally remains a r
 ## Environment
 
 ```bash
-python3.11 -m venv .venv
-.venv/bin/python -m pip install -U pip
-.venv/bin/python -m pip install -e '.[dev]'
+uv sync --group dev
 ```
 
 ## Testing
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m pytest tests -q
+PYTHONPATH=src uv run pytest tests -q
 ```
 
 Add the relevant smoke checks:
 
 ```bash
-PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-asgi \
+PYTHONPATH=src uv run python scripts/awiki_open_cli.py smoke-asgi \
   --data-dir /tmp/awiki-open-server-asgi
 
-PYTHONPATH=src .venv/bin/python scripts/awiki_open_cli.py smoke-cross-domain-local \
+PYTHONPATH=src uv run python scripts/awiki_open_cli.py smoke-cross-domain-local \
   --data-root /tmp/awiki-open-server-cross-domain --clean
 ```
 

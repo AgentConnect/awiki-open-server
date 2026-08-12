@@ -7,6 +7,19 @@ import pytest_asyncio
 from awiki_open_server.app.main import create_app
 from awiki_open_server.app.settings import Settings
 from awiki_open_server.service_identity import generate_ed25519_private_key_pem
+from awiki_open_server.shared import runtime
+
+
+@pytest.fixture
+def mock_public_dns(monkeypatch):
+    """Keep mocked remote-service tests independent of the host DNS resolver."""
+    monkeypatch.setattr(
+        runtime.socket,
+        "getaddrinfo",
+        lambda _host, port, *_args, **_kwargs: [
+            (runtime.socket.AF_INET, runtime.socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))
+        ],
+    )
 
 
 @pytest_asyncio.fixture

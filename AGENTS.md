@@ -6,10 +6,10 @@ This repository implements `awiki-open-server`, a single-process Awiki Community
 
 ## Build, Test, and Development Commands
 
-Install runtime and test dependencies:
+Install the locked runtime and development dependencies:
 
 ```bash
-python3 -m pip install -e '.[dev]'
+uv sync --group dev
 ```
 
 The project pins ANP Python SDK `anp==0.9.2`; the protocol adapter fails fast when another version is loaded. In this workspace, use `PYTHONPATH=../anp/anp:src` for verification if the active environment still has an older installed `anp` package.
@@ -17,7 +17,7 @@ The project pins ANP Python SDK `anp==0.9.2`; the protocol adapter fails fast wh
 Run the full local suite:
 
 ```bash
-PYTHONPATH=src python3 -m pytest tests -q
+PYTHONPATH=src uv run pytest tests -q
 ```
 
 Start a local server:
@@ -26,7 +26,7 @@ Start a local server:
 PYTHONPATH=src AWIKI_DATA_DIR=.awiki-open-server \
 AWIKI_PUBLIC_BASE_URL=http://127.0.0.1:8765 \
 AWIKI_DID_DOMAIN=localhost \
-python3 -m uvicorn 'awiki_open_server.app.main:create_app' \
+uv run uvicorn 'awiki_open_server.app.main:create_app' \
   --factory --host 127.0.0.1 --port 8765
 ```
 

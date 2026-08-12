@@ -230,7 +230,7 @@ async def test_anp_envelope_on_public_rpc(client):
 
 
 @pytest.mark.asyncio
-async def test_local_direct_to_remote_did_discovers_anp_service_and_posts(client, monkeypatch):
+async def test_local_direct_to_remote_did_discovers_anp_service_and_posts(client, monkeypatch, mock_public_dns):
     alice_did, alice_token, alice_key, _ = await register_with_key(client, "remote-alice")
     remote_did = "did:wba:awiki.info:users:bob"
     captured: dict = {}
@@ -390,7 +390,7 @@ async def test_remote_direct_rejects_invalid_origin_proof_signature(client, monk
 
 
 @pytest.mark.asyncio
-async def test_remote_direct_rejects_message_service_incompatible_result(client, monkeypatch):
+async def test_remote_direct_rejects_message_service_incompatible_result(client, monkeypatch, mock_public_dns):
     alice_did, alice_token, alice_key, _ = await register_with_key(client, "remote-bad-result")
     remote_did = "did:wba:awiki.info:users:bob"
 
@@ -439,7 +439,7 @@ async def test_remote_direct_rejects_message_service_incompatible_result(client,
 
 
 @pytest.mark.asyncio
-async def test_remote_direct_with_service_identity_adds_verifiable_http_signature(tmp_path, monkeypatch):
+async def test_remote_direct_with_service_identity_adds_verifiable_http_signature(tmp_path, monkeypatch, mock_public_dns):
     private_key = generate_ed25519_private_key_pem()
     app = create_app(
         Settings(
@@ -609,7 +609,7 @@ async def test_public_anp_direct_requires_local_recipient(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_public_anp_direct_accepts_signed_peer_request(tmp_path, monkeypatch):
+async def test_public_anp_direct_accepts_signed_peer_request(tmp_path, monkeypatch, mock_public_dns):
     local_private_key = generate_ed25519_private_key_pem()
     app = create_app(
         Settings(
@@ -639,6 +639,11 @@ async def test_public_anp_direct_accepts_signed_peer_request(tmp_path, monkeypat
         return remote_doc
 
     monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
+    monkeypatch.setattr(
+        runtime,
+        "_http_post_json",
+        lambda *_args, **_kwargs: runtime_capabilities("did:wba:awiki.info"),
+    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as signed_client:
         alice_did, alice_token = await register(signed_client, "signed-inbound")
@@ -669,13 +674,14 @@ async def test_public_anp_direct_accepts_signed_peer_request(tmp_path, monkeypat
         signature_headers = remote_identity.sign_headers("http://testserver/anp-im/rpc", "POST", base_headers, body)
         response = await signed_client.post("/anp-im/rpc", content=body, headers={**base_headers, **signature_headers})
         data = response.json()
+        assert "result" in data, data
         assert data["result"]["message_id"] == "msg-peer-in"
         inbox = await rpc(signed_client, "/im/rpc", "inbox.get", token=alice_token)
         assert inbox["result"]["messages"][0]["body"]["text"] == "signed inbound"
 
 
 @pytest.mark.asyncio
-async def test_public_anp_direct_verifies_signature_against_public_base_url(tmp_path, monkeypatch):
+async def test_public_anp_direct_verifies_signature_against_public_base_url(tmp_path, monkeypatch, mock_public_dns):
     local_private_key = generate_ed25519_private_key_pem()
     app = create_app(
         Settings(
@@ -705,6 +711,11 @@ async def test_public_anp_direct_verifies_signature_against_public_base_url(tmp_
         return remote_doc
 
     monkeypatch.setattr(runtime, "_http_get_json", fake_get_json)
+    monkeypatch.setattr(
+        runtime,
+        "_http_post_json",
+        lambda *_args, **_kwargs: runtime_capabilities("did:wba:awiki.info"),
+    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://internal-testserver") as signed_client:
         local = await rpc(signed_client, "/did-auth/rpc", "register", {"handle": "signed-public-url"})

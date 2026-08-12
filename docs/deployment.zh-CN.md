@@ -31,12 +31,10 @@
 
 ```bash
 cd /opt/awiki-open-server
-python3 -m venv .venv
-.venv/bin/python -m pip install -U pip
-.venv/bin/python -m pip install -e .
+uv sync --no-dev --frozen
 ```
 
-生产安装不需要 `.[dev]`，除非服务器本身承担测试任务。
+`--no-dev` 排除开发依赖，`--frozen` 要求已提交的锁文件与 `pyproject.toml` 一致。
 
 ## 4. Service DID 与私钥
 
@@ -121,7 +119,7 @@ https://community.example.com/anp-im/rpc
 
 ```bash
 PYTHONPATH=src \
-.venv/bin/python scripts/awiki_open_cli.py verify-public \
+uv run --no-dev --frozen python scripts/awiki_open_cli.py verify-public \
   --base-url https://community.example.com \
   --did-domain community.example.com
 ```
