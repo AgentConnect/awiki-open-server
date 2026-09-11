@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 
-REQUIRED_ANP_SDK_VERSION = "0.9.2"
+REQUIRED_ANP_SDK_VERSION = "1.0.3"
 
 
 def _loaded_anp_version() -> str | None:
