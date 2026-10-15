@@ -14,6 +14,12 @@ with close code 4406. Stored negotiations cannot reenable it; ordinary renegotia
 an empty capability set. Ordinary Sync v2, Schema 3 Snapshot, plaintext Direct, and ordinary
 Groups remain available; public E2EE capabilities stay disabled.
 
+Profile compatibility responses (`get_public_profile`/`get_me`, the embedded local
+Handle lookup profile, and users profile views) also expose a canonical `full_handle`
+matching the authoritative binding. Existing `handle` spellings remain unchanged,
+as do stored identities and conversations. New clients prefer `full_handle` so the
+legacy `name@domain` display form does not conflict with the `name.domain` binding.
+
 CLI/App versions that require P5/P6 must change their requests to ordinary sync only.
 The CLI 1.0.58 and App 0.1.38+49 passes below apply to temporary compatibility at `09d38fd`,
 not current-branch client acceptance. Verification here covers disabled capabilities,
