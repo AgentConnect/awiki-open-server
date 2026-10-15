@@ -220,3 +220,24 @@ Limitations/failures:
 ```
 
 Custom tenants do not automatically discover another tenant’s legacy credentials. Explicitly import with `awiki-cli --migration id import-v1 --name <name> --credentials-dir <legacy-credentials-directory>`. The source override applies only to this import; it does not change tenant configuration or enable the reliable listener.
+
+## 后端能力发现（合同 v1）
+
+`GET /user-service/v1/server-info?capabilities_version=1` 保留外层
+`schema_version: 1`，回显 `capabilities_version: 1`。未携带版本时保留旧手机号免验证
+发现形状；新版使用 `handle_only`，不要求无业务用途的手机号或邮箱。未知合同版本返回
+422。`client_platform` 不改变服务器事实，发现没有注册、写入身份或发送验证码的副作用。
+
+身份声明明确关闭多设备、设备撤销、能力升级、管理权转移；找回 methods 为空。
+账户同步、完整 Agent/Daemon/Skill 产品、邮件、Model Proxy、Guest 和托管关闭。
+基础内容和站点仍开放，内容数量限制为 5；不将部分 Agent 兼容路由声明成完整产品。
+更新政策明确不提供，客户端不得据此改用官方租户的更新源或清除已缓存最低版本。
+
+已认证 `/im/rpc` 的 `anp.get_capabilities` 增加 `awiki_local`：普通私聊、群聊、附件、
+历史、已读、普通 Sync v2、Schema 3 Snapshot、开放加入和管理员添加可用。
+P5/P6、所有加密、邀请及审批关闭；附件大小来自运行配置，群成员/加入数量为既有实际限制。
+匿名兼容发现及公共 `/anp-im/rpc` 不返回此本域扩展；公共 ANP 发现及认证边界不变。
+客户端须请求空扩展通道集合，不能退回隐式 bootstrap 或把加密请求改为明文。
+
+公开字段合同由 AWiki IM Core API 文档维护；本仓运行、安装和测试不依赖该仓。
+本地验证：`uv run pytest tests/test_registration_discovery.py tests/test_messaging_surface.py tests/test_standard_sync_asgi.py -q`。

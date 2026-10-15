@@ -197,6 +197,19 @@ def capabilities(_: dict[str, Any], request: Request) -> dict[str, Any]:
         },
     }
 
+    if not public_rpc and current_did(request, required=False) is not None:
+        enabled = {"direct", "groups", "attachments", "history", "read_state", "sync",
+                   "snapshot", "group_open_join", "group_admin_add"}
+        disabled = {"p5_device", "p6_group", "direct_e2ee", "group_e2ee",
+                    "encrypted_attachments", "group_invite", "group_approval"}
+        local = {name: {"enabled": True, "protocol_version": 1} for name in sorted(enabled)}
+        local.update({name: {"enabled": False, "protocol_version": 1,
+                             "reason_code": "not_supported"} for name in sorted(disabled)})
+        local["attachments"]["limits"] = {"max_object_bytes": str(settings.max_attachment_bytes)}
+        local["groups"]["limits"] = {"max_members": 100, "max_joined_groups": 20}
+        local["sync"]["limits"] = {"max_devices": 1, "max_client_instances": 1}
+        local["snapshot"]["limits"] = {"schema": 3, "delivery": "paged_v1"}
+        result["awiki_local"] = {"capabilities_version": 1, "capabilities": local}
     if not public_rpc:
         result["features"]["ordinary_sync"] = {
             "profile": "anp.sync.local.v2",
