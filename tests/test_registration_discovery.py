@@ -142,3 +142,24 @@ async def test_server_info_advertises_local_open_registration_and_actual_boundar
     assert all(not value["enabled"] for value in info["agents"].values())
     other = await client.get("/user-service/v1/server-info?registration_domain=other.example")
     assert other.json()["identity"]["handle_registration"]["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_versioned_capabilities_preserve_legacy_registration(client):
+    legacy = (await client.get("/user-service/v1/server-info")).json()
+    current = (await client.get("/user-service/v1/server-info?capabilities_version=1")).json()
+    assert "capabilities_version" not in legacy
+    assert legacy["identity"]["handle_registration"]["default_method"] == "phone"
+    assert current["capabilities_version"] == current["schema_version"] == 1
+    assert current["identity"]["handle_registration"]["default_method"] == "handle_only"
+    assert current["identity"]["multi_device"]["enabled"] is False
+    assert current["account"]["state_sync"]["enabled"] is False
+    assert current["agents"]["daemon"]["enabled"] is False
+    assert current["content"]["pages"]["enabled"] is True
+    assert current["content"]["sites"]["enabled"] is True
+    assert current["content"]["hosting"]["enabled"] is False
+    assert current["client_updates"]["policy"]["enabled"] is False
+    for platform in ("app", "cli", "dsh", "daemon"):
+        assert (await client.get(f"/user-service/v1/server-info?capabilities_version=1&client_platform={platform}")).json() == current
+    assert (await client.get("/user-service/v1/server-info?capabilities_version=2")).status_code == 422
+    assert (await client.get("/user-service/v1/server-info?capabilities_version=bad")).status_code == 422

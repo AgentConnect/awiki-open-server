@@ -867,6 +867,7 @@ def public_profile(params: dict[str, Any], request: Request) -> dict[str, Any]:
     profile_uri = profile.get("profile_uri")
     return {
         **profile,
+        "full_handle": _split_handle(str(profile["handle"]), settings.did_domain)[3],
         "user_id": profile["did"],
         "user_name": display_name,
         "nick_name": display_name,
@@ -987,7 +988,7 @@ def _profile_from_did(request: Request, did: str) -> dict[str, Any]:
 
 def _users_profile_view(profile: dict[str, Any], request: Request) -> dict[str, Any]:
     settings = get_settings(request)
-    local, domain, _, _ = _split_handle(str(profile["handle"]), settings.did_domain)
+    local, domain, _, full = _split_handle(str(profile["handle"]), settings.did_domain)
     display_name = profile.get("display_name") or local
     description = profile.get("description")
     profile_uri = profile.get("profile_uri") or f"{settings.public_base_url.rstrip('/')}/profiles/{profile['did']}"
@@ -1008,6 +1009,7 @@ def _users_profile_view(profile: dict[str, Any], request: Request) -> dict[str, 
         "created_at": user_row["created_at"] if user_row else "",
         "handle": local,
         "handle_domain": domain,
+        "full_handle": full,
     }
 
 
@@ -1205,7 +1207,7 @@ def handle_lookup(params: dict[str, Any], request: Request) -> dict[str, Any]:
         "domain": domain,
         "full_handle": full,
         "status": "active",
-        "profile": profile,
+        "profile": {**profile, "full_handle": full},
     }
 
 
