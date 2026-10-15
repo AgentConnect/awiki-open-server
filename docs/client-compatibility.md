@@ -177,7 +177,11 @@ Verify registration/login; Direct send/receive/history; unread/read; Group creat
 
 ### Agent/Daemon limitation
 
-AWiki Me enables Agent/Daemon APIs only for `awiki.ai`, `awiki.info`, and `anpclaw.com`. A normal self-hosted domain may support login and messages while the Agent page remains unsupported. Open Server compatibility routes do not bypass the app realm policy.
+Capability-aware AWiki Me uses the versioned Server Info contract for Agent and
+Daemon availability. Open Server declares both complete products unsupported;
+partial compatibility routes do not enable them. Older App releases may still
+use a tenant-domain allowlist and require a client upgrade to consume this
+contract. The server declaration does not depend on its domain or client platform.
 
 ### E2EE
 
