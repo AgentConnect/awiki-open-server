@@ -19,6 +19,37 @@ def _capabilities_payload(request_id: object = "req-cap") -> dict:
     }
 
 
+@pytest.mark.parametrize("trace_id", [None, "message-service-trace"])
+@pytest.mark.asyncio
+async def test_public_capabilities_accepts_message_service_diagnostic_metadata(client, trace_id):
+    payload = _capabilities_payload()
+    payload["params"]["meta"].update(
+        sender_did=None, target=None, message_id=None, created_at=None,
+        trace_id=trace_id, content_type=None,
+    )
+    response = await client.post("/anp-im/rpc", json=payload)
+    assert response.json()["result"]["service_did"] == "did:wba:testserver"
+
+
+@pytest.mark.asyncio
+async def test_public_diagnostic_trace_does_not_replace_business_sender(client):
+    payload = {
+        "jsonrpc": "2.0", "id": "trace-is-not-identity", "method": "direct.send",
+        "params": {
+            "meta": {
+                "profile": "anp.direct.base.v1", "security_profile": "transport-protected",
+                "trace_id": "did:wba:testserver:users:alice:e1_fixture",
+                "target": {"kind": "agent", "did": "did:wba:testserver:users:bob:e1_fixture"},
+                "operation_id": "trace-not-authority", "message_id": "trace-not-authority",
+                "content_type": "text/plain",
+            },
+            "body": {"text": "diagnostic trace cannot authenticate a sender"},
+        },
+    }
+    response = await client.post("/anp-im/rpc", json=payload)
+    assert response.json()["error"]["data"]["details"] == {"field": "meta.sender_did"}
+
+
 @pytest.mark.asyncio
 async def test_public_binding_parse_batch_params_and_id_rules(client) -> None:
     parse = await client.post(

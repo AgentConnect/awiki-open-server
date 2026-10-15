@@ -21,6 +21,38 @@ def test_rust_cli_failure_diagnostics_redact_credentials_before_logging():
     assert "unstructured-secret" not in json.dumps(awiki_open_cli._safe_cli_diagnostic((), "unstructured-secret"))
 
 
+def test_rust_cli_stdin_diagnostics_redact_verification_material():
+    result = awiki_open_cli._safe_cli_diagnostic(
+        ("id", "register", "--verification-stdin"),
+        json.dumps({"error": {"message": "invalid fixture-otp for fixture-phone"}}),
+        sensitive_values=("fixture-otp", "fixture-phone"),
+    )
+    assert "fixture-otp" not in json.dumps(result)
+    assert "fixture-phone" not in json.dumps(result)
+
+
+def test_rust_cli_registration_uses_standard_two_step_flow(tmp_path, monkeypatch):
+    calls = []
+    def fake_cli(cli_bin, workspace, home, *args, input_data=None):
+        calls.append((args, input_data))
+        assert args == ("id", "register", "--handle", "alice", "--verification-stdin")
+        if "otp" not in input_data:
+            path = tmp_path / "local-registration-otp" / awiki_open_cli.re.sub(r"[^0-9A-Za-z]+", "_", input_data["phone"])
+            path.parent.mkdir()
+            path.write_text("123456\n")
+            return {"ok": True, "data": {"state": "otp_sent"}}
+        assert input_data["otp"] == "123456"
+        return {"ok": True, "data": {"identity": {"did": "did:wba:test:alice:e1_fixture"}}}
+    monkeypatch.setattr(awiki_open_cli, "rust_cli_json", fake_cli)
+    result = awiki_open_cli.register_rust_cli_identity(
+        "fixture-cli", tmp_path / "workspace", tmp_path / "home", handle="alice", server_data_dir=tmp_path,
+    )
+    assert result["data"]["identity"]["did"] == "did:wba:test:alice:e1_fixture"
+    assert len(calls) == 2
+    assert calls[0][1]["phone"] == calls[1][1]["phone"]
+    assert list((tmp_path / "local-registration-otp").iterdir()) == []
+
+
 def test_cli_help():
     result = subprocess.run(
         [sys.executable, "scripts/awiki_open_cli.py", "--help"],

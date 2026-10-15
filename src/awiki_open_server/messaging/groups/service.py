@@ -26,7 +26,6 @@ from awiki_open_server.messaging.groups.projection import (
     refresh_hosted_local_projections,
 )
 from awiki_open_server.messaging.groups.protocol import BASE_PROFILES, BASE_V2, require_group_protocol, validate_v2_shape
-from awiki_open_server.protocol.anp_adapter import build_content_digest
 from awiki_open_server.service_identity import validate_origin_proof_structure
 from awiki_open_server.shared import runtime
 from awiki_open_server.shared.errors import Conflict, InvalidParams, NotFound, Unauthorized
@@ -176,7 +175,9 @@ def _request_context(
             get_settings(request),
             caller_anchor=sender_did,
         )
-    payload_digest = build_content_digest(jcs.canonicalize({"method": method, "meta": meta, "body": body}))
+    # The verified business proof is the receipt/idempotency digest authority.
+    # Hop diagnostics are retained in meta but excluded by P1 Appendix A.3.
+    payload_digest = auth["origin_proof"]["contentDigest"]
     return GroupRequest(method, sender_did, operation_id, target_did, meta, auth, body, payload_digest)
 
 

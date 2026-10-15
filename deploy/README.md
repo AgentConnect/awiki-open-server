@@ -43,7 +43,7 @@ That command verifies:
 
 1. Install the repository under a release path such as `/opt/awiki-open-server`.
 2. Sync the locked production environment so pinned dependencies, including
-   `anp==0.9.2`, are installed:
+   `anp==1.0.6`, are installed:
 
    ```bash
    cd /opt/awiki-open-server
@@ -77,16 +77,11 @@ If the interoperability gate fails after `verify-public` passes, record the requ
 recipient DID, target URL, RPC error body, and service logs before changing any sibling
 service.
 
-## Current rwiki.cn Server Notes
+## Deployment baseline
 
-On the current shared server, PyPI access returned SSL EOF while creating an
-isolated venv. The installed systemd service therefore sets `PYTHONPATH` so the
-process loads the sibling ANP SDK checkout first:
-
-```bash
-<workspace>/anp/anp:<workspace>/awiki-open-server/src:<python-user-site-packages>
-```
-
-This was verified to load ANP SDK `0.9.2`. A cleaner production deployment can
-switch back to the uv-managed `.venv/bin/python` once `uv sync --no-dev --frozen`
-can install `anp==0.9.2` normally.
+Use the pinned registry SDK through `uv sync --locked --no-dev`; do not load a
+sibling ANP checkout through `PYTHONPATH`. On 2026-10-13, public `rwiki.cn/healthz`
+reported MessageService rather than OpenServer. These files are deployment
+examples, not evidence that rwiki.cn currently hosts this repository. Select a
+separate OpenServer domain for public interoperability validation and preserve
+the existing MessageService deployment.

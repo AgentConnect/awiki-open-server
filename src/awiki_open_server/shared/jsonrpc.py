@@ -48,6 +48,8 @@ _ANP_META_KEYS = frozenset(
         "created_at",
         "content_type",
         "trace",
+        # Retained MessageService diagnostic field; never an identity or route.
+        "trace_id",
     }
 )
 

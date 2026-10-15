@@ -2,13 +2,100 @@
 
 [English](client-compatibility.md) | [简体中文](client-compatibility.zh-CN.md)
 
-Last reviewed: 2026-09-18. Unpublished candidate evidence and historical released-client evidence are distinguished below.
+Last reviewed: 2026-10-15. The alignment baseline is `release/0929`; current acceptance scope and historical evidence are distinguished below.
 
-## Current protocol-upgrade path (R3)
+## release/0929 alignment status
+
+Open Server pins published ANP Python SDK **1.0.6**. Handle `registration_check` on
+`/user-service/v1/handle/rpc` returns `register/existing/unavailable` without reserving a name,
+issuing authorization, or echoing contacts. Checks are limited to 20 per minute per trusted ASGI
+peer; final registration still checks ownership transactionally. Self-hosted registration does
+not require Hosted Platform short-name invitations.
+
+`GET /user-service/v1/server-info` implements the App's schema 1 discovery contract: local WBA
+creation and registration without contact verification. It does not advertise SMS/email delivery,
+Handle Recovery, Root Transfer, Model Proxy, Guest Gateway, or hosted Skill Agent capabilities.
+CLI phone registration can use a local operator code, which does not prove phone ownership.
+The unmodified `release/0929` App Dart `OnboardingServerInfo` parser accepted this response,
+recognizing registration without contact verification and disabled Recovery. This contract
+check does not replace a real App journey.
+
+On 2026-10-14 the user authorized transitional initialization acknowledgement: valid existing-client
+P5/P6 subscriptions succeed at bootstrap and remain permanently empty during delta. The matching
+WebSocket subprotocol requires the bound installation and emits only plaintext sync hints. No
+encrypted producer, ciphertext storage, PreKey, KeyPackage, or encrypted attachment operation is
+enabled. Public ANP E2EE profiles/security remain disabled. Clients requesting ordinary sync only
+receive no compatibility streams.
+
+Official CLI **1.0.58**, commit `b7ed6f95f7fb90151726a96e6bed756957f6312e`, Linux x86_64
+SHA-256 `459bf8737cf27c8441fd0f4d22cefdf67958a777ffefd193fef0b08126282c85`, passed standard
+registration and plaintext Direct writes. Its official installer was selected from
+`https://awiki.me/cli/stable/manifest.json`, verified against its published digest, and left
+unmodified. CLI 1.0.57 is now below the default tenant's minimum version 1.0.58.
+The expanded `smoke-rust-cli-connect` passed standard registration, bidirectional plaintext Direct,
+Inbox/History, and plaintext Group create/add/send/read.
+
+The remaining focused gates were completed on 2026-10-15:
+
+- The complete `smoke-rust-cli-realtime-restart` passed: two server boots, three listener boots,
+  and five plaintext messages cover live notifications, listener downtime recovery, server
+  restart, and history. Every readiness check completed sync v2 bootstrap/subprotocol negotiation
+  with `legacy_sync_used=false`. The former final `bridge_read` failure came from a CLI bridge
+  read without its default identity. The gate now explicitly selects Bob using `--identity`
+  for its final two reads, retaining all original assertions.
+- Real aWIKI ME **0.1.38+49**, source `a205a36af81d558523722d1a5cf5e50523fe8845`, ran the
+  unmodified `lib/main.dart` on Linux/Xvfb. Custom HTTPS tenant discovery, standard registration,
+  bidirectional plaintext Direct and ordinary Group messaging, and identity/conversation/history
+  recovery after App restart passed. Official CLI reads checked exact sender and content; UI
+  screenshots prove reception. The native library used registry Core **0.1.9** and passed the
+  existing provenance guard. `AWIKI_E2E` enables existing isolated storage and semantics only;
+  no fake services or client-state edits were used. This App rejects an empty phone before
+  precheck with `phone_invalid_intl_or_cn`; a dedicated test number allowed contact-free
+  registration without SMS/OTP. That client issue remains unchanged. This is focused Linux UI
+  acceptance, not a full or cross-platform App E2E pass.
+- Independent public OpenServer and real `awiki-info-testing` (`https://awiki.info`) exchanged
+  Direct messages in both directions. With each service as ordinary Group Host, messages sent
+  by each side were visible at the other member's Home, including signed requests, Group Receipt,
+  and content checks. Public HTTPS/DID discovery was used without resolver substitution,
+  unsigned peers, or shared-service changes. Existing `awiki-system-test` identity and
+  cross-domain helpers were reused. Membership readiness waits for the visible `group.list`
+  role rather than requiring a local member projection to contain the entire Host roster.
+
+Initial conflict, membership query/wait failures, temporary tunnel interruption, and successful
+retries remain recorded separately. Redacted JSON, screenshots, artifact provenance, and cleanup
+scope are in workspace `verification-runs/openserver-release0929-20261015/`. Remote User Service
+identities remain under the owning repository's retention policy. Exact Message cleanup failed
+and residuals are recorded; cleanup is not claimed complete. Temporary processes were stopped.
+No successful encryption flows were run. Automatic client prekey/KeyPackage requests returned
+`not_supported`. Pre-transition failures follow.
+
+On 2026-10-13, unmodified CLI **1.0.57**, current release/0929 source
+`ec90c4cc772ef7a4c64809b6158affb807798df0`, Linux x86_64 SHA-256
+`422955d37df9237032933ebb620dba66392145a4ce22a78c123a2b695aa9ee11`,
+passed precheck and committed single-device registration, then failed initial receive sync with
+`registration_receive_pending`. A subsequent `msg inbox` failed with `sync.lanes_not_supported`.
+The existing CLI `scripts/release/registry-build.py` built a fresh committed Git archive and
+verified registry ANP 1.0.6, Identity 0.2.5, and Core 0.1.8. CLI and dependency source remained
+unchanged. This proves the current release combination's behavior, not stable publication.
+The native source/dependency receipt is `/tmp/openserver-release0929-cli-registry-ec90c4cc.json`;
+redacted runtime results are `/tmp/openserver-release0929-ec90c4cc-runtime/result.json`.
+The test server was stopped.
+
+Before this transition, Core requested P5/P6 from compiled features and required the same lane
+set, resulting in the recorded `sync.lanes_not_supported` failure. This is an AWiki private sync
+contract mismatch, not evidence of an ANP violation by MessageService or UserService. The user's
+2026-10-14 empty-stream transition replaces initialization rejection; encrypted operations remain
+unsupported.
+
+Rust CLI smoke gates now use standard two-step registration with `--verification-stdin`,
+never `--community`. Failure diagnostics redact stdin verification material and gates retain
+nonzero exits on failure.
+
+## Historical protocol-upgrade path (R3, 2026-09-18)
 
 Acceptance uses the official unmodified CLI from `https://awiki.info/cli/stable/manifest.json`: version **1.0.52**, commit `dde0a9c54eebf29a2ec97089e90a1fa77ba768c5`, linux-amd64 SHA-256 `a055da8dad2969739c50cee4f2ee0bf34b45f5354ea74617f103534b239f9d1a`. Do not use candidate16, `--community`, or an unreleased 1.0.53 Community build as the current path.
 
-New identities use official `id register` with a handle plus phone verification material. Open Server does not send SMS; `send_otp` with purpose `awiki.identity.register.v1` stores a one-time local operator code under the data directory. Pass that code as `--otp`. The reliable listener requires an actual single-device Manifest/binding. Official CLI 1.0.52 always requests P5/P6; Open Server returns `sync.lanes_not_supported` and does not implement E2EE. Ordinary Schema 3 Snapshot recovery is implemented for the single device. Open does not provide identity/Handle recovery or Root Transfer.
+New identities use official `id register` with a handle plus phone verification material. Open Server does not send SMS; `send_otp` with purpose `awiki.identity.register.v1` stores a one-time local operator code under the data directory. Pass that code as `--otp`. The reliable listener requires an actual single-device Manifest/binding. At that time CLI 1.0.52 was blocked by `sync.lanes_not_supported`; the current transition is described above and E2EE remains unsupported. Ordinary Schema 3 Snapshot recovery is implemented for the single device. Open does not provide identity/Handle recovery or Root Transfer.
 
 R2 unpublished CLI 1.0.53 / SHA `8169383d86a57eaed23e015dc948f8176216e9f81903d16f590dd03c513f847f` over `c61fa4b419b96fdabdbd321f1a8e47cdd7f77302` is historical only.
 
@@ -25,7 +112,7 @@ R2 unpublished CLI 1.0.53 / SHA `8169383d86a57eaed23e015dc948f8176216e9f81903d16
 
 Repository and public gates cover DID registration; Direct send, Inbox, and History; Group create/get/list/add/join/members/update/send/messages/leave/remove in both host directions; People follow/status/following/followers; Site root/pages; and attachments as implemented.
 
-Those are gate targets, not a claim that every future client passes automatically. A clean `awiki-cli` 1.0.43 build at commit `bbeb8a5c` was verified on 2026-08-08. The real-CLI gates cover binary Direct/Group Attachment download with byte comparison, members and cursor pagination, idempotent mark-read and restart persistence, foreground Realtime with `awiki.sync.changed.v2`, listener/server restart recovery, and two independent TLS domains with bidirectional plaintext Direct and a Community Group hosted in each direction. The v2 sync profile is a wire-version contract, not a multi-device claim: Open Server binds one DID to exactly one device and one client instance and rejects additional devices/instances. Empty accounts may use tail-only bootstrap; log gaps and expired cursors recover through Schema 3 paged Snapshot (`awiki.message-sync.explicit-negotiation.v1`, `sync.snapshot_paging.v1`), then ordinary delta. Official CLI 1.0.52 still requests P5/P6 lanes, which Open Server rejects with `sync.lanes_not_supported` (no silent empty-lane accept, no E2EE). Cross-device state sharing is not provided.
+Those are gate targets, not a claim that every future client passes automatically. A clean `awiki-cli` 1.0.43 build at commit `bbeb8a5c` was verified on 2026-08-08. The real-CLI gates cover binary Direct/Group Attachment download with byte comparison, members and cursor pagination, idempotent mark-read and restart persistence, foreground Realtime with `awiki.sync.changed.v2`, listener/server restart recovery, and two independent TLS domains with bidirectional plaintext Direct and a Community Group hosted in each direction. The v2 sync profile is a wire-version contract, not a multi-device claim: Open Server binds one DID to exactly one device and one client instance and rejects additional devices/instances. Empty accounts may use tail-only bootstrap; log gaps and expired cursors recover through Schema 3 paged Snapshot (`awiki.message-sync.explicit-negotiation.v1`, `sync.snapshot_paging.v1`), then ordinary delta. Since 2026-10-14, existing-client P5/P6 subscriptions receive transitional empty streams so plaintext sync proceeds; encrypted operations remain rejected. Cross-device state sharing is not provided.
 
 Run the gates separately:
 
@@ -55,7 +142,7 @@ AWIKI_RUN_RUST_CLI_SYSTEM_TESTS=1 AWIKI_CLI_BIN=/path/to/pinned/awiki-cli \
 uv run --locked python -m pytest tests/test_rust_cli_system.py -q
 ```
 
-Reports must distinguish `connection-and-write passed`, `single-device sync v2 passed`, and `full local user journey passed`. Record the CLI commit, `awiki-cli version`, artifact SHA-256, Open Server commit, and date.
+Reports must distinguish `registration-and-plaintext-messaging passed`, `single-device sync v2 passed`, and `full local user journey passed`. Record the CLI commit, `awiki-cli version`, artifact SHA-256, Open Server commit, and date.
 
 Candidate connection example, after configuring [CLI identity secret storage](https://github.com/AgentConnect/awiki-cli-rs2/blob/c61fa4b419b96fdabdbd321f1a8e47cdd7f77302/docs/architecture/identity-secret-storage.md):
 

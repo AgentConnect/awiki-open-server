@@ -332,16 +332,18 @@ def test_device_token_crypto_verifier_rejects_none_wrong_key_and_wrong_binding(t
         validate_device_token(f"{none_header}.{token.split('.')[1]}.open-server", account, key)
 
 
-@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("bundle", ["current-base", "current-device", "legacy-draft", "legacy-device"])
 @pytest.mark.asyncio
-async def test_manifest_validation_keeps_original_published_profile_bytes(tmp_path, legacy):
+async def test_manifest_validation_keeps_original_published_profile_bytes(tmp_path, bundle):
     app, _ = setup_app(tmp_path)
     root, _, document = document_keys()
     profiles = document["deviceManifest"]["devices"][0]["profiles"]
-    if legacy:
+    if bundle == "legacy-draft":
         document["deviceManifest"]["devices"][0]["profiles"] = [p[:-1] + "2" for p in profiles]
-    else:
+    elif bundle != "legacy-device":
         profiles[profiles.index("anp.group.base.v1")] = "anp.group.base.v2"
+    if bundle in {"current-device", "legacy-device"}:
+        profiles.extend(["anp.direct.e2ee.v2", "anp.group.e2ee.v2"])
     signed = sign_did_document(document, root)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
         registered, returned_document = await register_device(client, root, document)

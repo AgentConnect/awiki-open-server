@@ -29,6 +29,8 @@ LANE_P5 = "lanes.p5_device.v1"
 LANE_P6 = "lanes.p6_group.v1"
 P6_DELIVERY = "p6.delivery_context.v1"
 KNOWN_LANE_CAPABILITIES = (LANE_P5, LANE_P6, P6_DELIVERY)
+COMPAT_LANE_EPOCH = "1"
+COMPAT_LANES = {LANE_P5: "p5_device", LANE_P6: "p6_group"}
 SECTION_ORDER = (
     "read_states",
     "groups",
@@ -117,13 +119,9 @@ def parse_bootstrap_capabilities(body: dict[str, Any]) -> BootstrapCapabilities:
         or snapshot.get("deliveries") != ["paged_v1"]
     ):
         raise _invalid({"field": "requested_snapshot_capabilities"})
-    if requested_raw:
-        raise SyncProtocolError(
-            "sync.lanes_not_supported",
-            code=4200,
-            details={"requested": list(requested_raw), "supported": []},
-        )
-    return BootstrapCapabilities(client_instance_id, True, True, tuple(requested_raw), False)
+    # Transitional acknowledgement for unmodified clients. No encrypted
+    # producer exists: requested lane subscriptions remain empty read streams.
+    return BootstrapCapabilities(client_instance_id, True, True, tuple(requested_raw), p6_requested)
 
 
 def encoded_size(item: Any) -> int:
@@ -418,9 +416,56 @@ def recovery_descriptor(
     }
 
 
-def attach_standard_bootstrap_fields(result: dict[str, Any], *, snapshot_paging: bool) -> dict[str, Any]:
+def empty_compat_cursor() -> dict[str, str]:
+    return {"stream_epoch": COMPAT_LANE_EPOCH, "scan_seq": "0"}
+
+
+def attach_standard_bootstrap_fields(
+    result: dict[str, Any], *, snapshot_paging: bool,
+    requested: tuple[str, ...] = (), client_instance_id: str | None = None,
+) -> dict[str, Any]:
     result = dict(result)
     if snapshot_paging:
-        result["sync_capabilities"] = []
+        result["sync_capabilities"] = list(requested)
         result["snapshot_capability"] = dict(SNAPSHOT_CAPABILITY)
+    lanes = {
+        name: {"cursor": empty_compat_cursor(), "committed_seq": "0"}
+        for capability, name in COMPAT_LANES.items() if capability in requested
+    }
+    if lanes:
+        result["lanes"] = lanes
+    if LANE_P6 in requested:
+        if not client_instance_id:
+            raise ValueError("compatibility bootstrap requires the bound client instance")
+        result["p6_delivery"] = {
+            "profile": P6_DELIVERY, "client_instance_id": client_instance_id, "activated": True,
+        }
     return result
+
+
+def empty_compat_delta_lanes(
+    body: dict[str, Any], *, negotiated: tuple[str, ...], client_instance_id: str,
+) -> dict[str, Any]:
+    if "lanes" not in body:
+        if "p6_delivery" in body:
+            raise _invalid({"reason": "p6_unpaired"})
+        return {}
+    lanes = body["lanes"]
+    allowed = {name for capability, name in COMPAT_LANES.items() if capability in negotiated}
+    if not isinstance(lanes, dict) or not lanes or set(lanes) - allowed:
+        raise _invalid({"field": "lanes", "reason": "not_negotiated"})
+    for section in lanes.values():
+        if not isinstance(section, dict) or set(section) != {"cursor", "committed_seq"}:
+            raise _invalid({"field": "lanes"})
+        if section["cursor"] != empty_compat_cursor() or section["committed_seq"] != "0":
+            raise _invalid({"field": "lanes.cursor", "reason": "empty_stream_required"})
+    if "p6_group" in lanes:
+        delivery = body.get("p6_delivery")
+        if delivery != {"profile": P6_DELIVERY, "client_instance_id": client_instance_id}:
+            raise _invalid({"field": "p6_delivery", "reason": "client_instance_mismatch"})
+    elif "p6_delivery" in body:
+        raise _invalid({"reason": "p6_unpaired"})
+    return {
+        name: {"events": [], "next_cursor": empty_compat_cursor(), "has_more": False}
+        for name in lanes
+    }

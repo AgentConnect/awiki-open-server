@@ -61,6 +61,12 @@ Public peer 调用仅在本地开发显式开启 unsigned peer 模式时可放�
 
 两者不能相互替代。
 
+MessageService 保留的 `meta.trace_id` 和历史 `meta.trace` 仅作为诊断数据接受。
+按 release/0929 的 vnext P1 Appendix A.3，运维跟踪字段不进入 Signed Request Object。
+Open Server 校验 Origin Proof 时排除这两个诊断字段，但保留原始 wire/storage 数据；
+Group Receipt 的 `payload_digest` 与幂等判断使用已验证 Origin Proof 的 `contentDigest`。
+更换 hop trace 不改变业务操作，不能替代 sender DID、target、operation ID 或签名。
+
 普通群请求的 P8 caller anchor 是 `meta.sender_did`。`group.incoming` 与 `group.state_changed` 的 caller anchor 是 `body.group_did`，且二者必须是没有 JSON-RPC `id` 的 Notification。
 
 ## 5. Outbound Direct

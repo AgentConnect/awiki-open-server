@@ -20,6 +20,7 @@ from awiki_open_server.protocol.anp_adapter import (
     require_did_document_binding,
     signature_keyid,
     validate_single_device_document,
+    valid_handle_local_part,
     verify_service_http_signature,
     web_handle_hint,
     web_handle_resolution_url,
@@ -41,6 +42,7 @@ from awiki_open_server.storage.db import Store
 from awiki_open_server.user_compat.device_auth import (
     bind_device_account, consume_auth_nonce, device_account, issue_device_token, validate_device_token,
 )
+from awiki_open_server.user_compat.registration import registration_check
 
 
 def _json(data: Any) -> str:
@@ -521,10 +523,12 @@ def _consume_registration_otp(conn, *, phone: str, otp: str, handle: str | None)
 
 def register(params: dict[str, Any], request: Request) -> dict[str, Any]:
     settings = get_settings(request)
-    raw_handle = params.get("handle") or f"user-{new_id('h')[2:8]}"
-    local_handle = str(raw_handle).split("@", 1)[0].split(".", 1)[0]
-    full_handle = str(raw_handle) if ("@" in str(raw_handle) or "." in str(raw_handle)) else f"{local_handle}.{settings.did_domain}"
-    stored_handle = str(raw_handle) if "@" in str(raw_handle) else f"{local_handle}@{settings.did_domain}"
+    raw_handle = str(params.get("handle") or f"user-{new_id('h')[2:8]}").strip().removeprefix("@").lower()
+    local_handle, handle_domain, stored_handle, full_handle = _split_handle(raw_handle, settings.did_domain.lower())
+    if handle_domain != settings.did_domain.lower():
+        raise InvalidParams("domain_not_supported")
+    if not valid_handle_local_part(local_handle):
+        raise InvalidParams("handle_invalid")
     uploaded_doc = params.get("did_document") if isinstance(params.get("did_document"), dict) else None
     if uploaded_doc and not isinstance(uploaded_doc.get("proof"), dict) and not settings.allow_unsigned_peer_dev:
         raise InvalidParams("unsigned_did_document_requires_dev_mode")
@@ -547,11 +551,12 @@ def register(params: dict[str, Any], request: Request) -> dict[str, Any]:
     phone = str(params.get("phone") or "").strip()
     otp_code = str(params.get("otp_code") or params.get("otp") or "").strip()
     with get_store(request).connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         if phone:
             if not otp_code:
                 raise InvalidParams("otp_required")
             _consume_registration_otp(conn, phone=phone, otp=otp_code, handle=local_handle)
-        existing_handle = conn.execute("SELECT did FROM users WHERE handle = ?", (stored_handle,)).fetchone()
+        existing_handle = conn.execute("SELECT did FROM users WHERE lower(handle) = ?", (stored_handle,)).fetchone()
         if existing_handle:
             raise Conflict("handle_already_registered", data={"handle": stored_handle, "did": existing_handle["did"]})
         existing_did = conn.execute("SELECT did FROM users WHERE did = ?", (did,)).fetchone()
@@ -1922,6 +1927,7 @@ ME_HANDLERS = {
 }
 
 HANDLE_HANDLERS = {
+    "registration_check": registration_check,
     "lookup": handle_lookup,
     "send_otp": send_otp,
     "get_my_handle": get_my_handle,

@@ -31,16 +31,15 @@ uv --version
 uv sync --group dev
 ```
 
-当前依赖固定 ANP Python SDK `anp==0.9.2`。Adapter 会在加载到其他版本时 fail fast。
-
-如本地环境暂时无法正确安装 ANP package，仓库开发验证可以显式使用 sibling SDK checkout：
+当前依赖固定已发布 ANP Python SDK `anp==1.0.6`。Adapter 会在加载到其他版本时 fail fast。
+如现有环境陈旧或正被服务使用，在单独的依赖环境中验证锁定的 registry 包：
 
 ```bash
-PYTHONPATH=../anp/anp:src \
-uv run pytest tests -q
+UV_PROJECT_ENVIRONMENT=/tmp/awiki-open-server-venv uv sync --locked --group dev
+UV_PROJECT_ENVIRONMENT=/tmp/awiki-open-server-venv uv run --locked pytest tests -q
 ```
 
-这只适用于受控开发环境，不应成为公共部署默认方案。
+不要通过 `PYTHONPATH` 替换为 sibling SDK 源码；源码测试不能证明发布包兼容性。
 
 ## 4. 启动
 
@@ -147,7 +146,7 @@ CLI 先验证所选 Home 的完整 Community 能力声明，再注册单设备�
 注册和明文 Direct 写入，并记录 CLI build 信息及 artifact SHA-256：
 
 ```bash
-PYTHONPATH=../anp/anp:src \
+PYTHONPATH=src \
 uv run python scripts/awiki_open_cli.py smoke-rust-cli-connect \
   --awiki-cli-bin /path/to/pinned/awiki-cli \
   --data-root /tmp/awiki-open-server-rust-cli-connect \
@@ -157,7 +156,7 @@ uv run python scripts/awiki_open_cli.py smoke-rust-cli-connect \
 完整用户旅程 Gate：
 
 ```bash
-PYTHONPATH=../anp/anp:src \
+PYTHONPATH=src \
 uv run python scripts/awiki_open_cli.py smoke-rust-cli-local \
   --awiki-cli-bin /path/to/awiki-cli \
   --data-root /tmp/awiki-open-server-rust-cli-local \
@@ -168,10 +167,10 @@ uv run python scripts/awiki_open_cli.py smoke-rust-cli-local \
 继续运行 foreground Realtime/restart 和双域 Gate：
 
 ```bash
-PYTHONPATH=../anp/anp:src uv run python scripts/awiki_open_cli.py \
+PYTHONPATH=src uv run python scripts/awiki_open_cli.py \
   smoke-rust-cli-realtime-restart --awiki-cli-bin /path/to/awiki-cli --clean
 
-PYTHONPATH=../anp/anp:src uv run python scripts/awiki_open_cli.py \
+PYTHONPATH=src uv run python scripts/awiki_open_cli.py \
   smoke-rust-cli-cross-domain --awiki-cli-bin /path/to/awiki-cli --clean
 ```
 
@@ -179,8 +178,8 @@ PYTHONPATH=../anp/anp:src uv run python scripts/awiki_open_cli.py \
 cross-domain Gate。`msg inbox/history` 使用 `anp.sync.local.v2`：一个 DID、恰好一个注册设备、一个
 client instance。空账号可以 tail-only bootstrap；日志缺口和过期 cursor 走 Schema 3 分页
 Snapshot，再接普通 delta、batch hydration 和 thread catch-up。Open Server 会拒绝第二个设备/client
-instance，不支持设备间共享、多设备游标收敛或 E2EE。正式 CLI 1.0.52 仍请求 P5/P6，服务端返回
-`sync.lanes_not_supported`。standard-HTTPS 与 cross-domain 命令使用隔离的 Linux 网络命名空间，需要
+instance，不支持设备间共享、多设备游标收敛或 E2EE。2026-10-14 用户授权现有客户端的 P5/P6
+订阅初始化成功、后续返回空流，明文继续同步，加密业务仍拒绝。standard-HTTPS 与 cross-domain 命令使用隔离的 Linux 网络命名空间，需要
 `unshare`、`mount` 和 `ip`。验证记录必须包含 CLI commit、二进制摘要、Open Server commit 和实际执行的 Gate。
 
 ## 9. 重要开发开关

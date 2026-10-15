@@ -7,7 +7,7 @@ import hashlib
 import json
 import re
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import importlib.util
 from importlib import metadata
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 
-REQUIRED_ANP_SDK_VERSION = "1.0.3"
+REQUIRED_ANP_SDK_VERSION = "1.0.6"
 
 
 def _loaded_anp_version() -> str | None:
@@ -67,6 +67,7 @@ from anp.wns import (  # noqa: E402
     canonicalize_binding_generation as _sdk_canonicalize_binding_generation,
     compare_binding_generations as _sdk_compare_binding_generations,
     normalize_handle as _sdk_normalize_handle,
+    validate_local_part as _sdk_validate_local_part,
     verify_handle_binding as _sdk_verify_handle_binding,
 )
 from anp.wns.models import HandleResolutionDocument as _SdkHandleResolutionDocument  # noqa: E402
@@ -129,6 +130,10 @@ def ed25519_root_fingerprint(public_key: Any) -> str:
     return _sdk_compute_multikey_fingerprint(public_key)
 
 
+def valid_handle_local_part(handle: str) -> bool:
+    return _sdk_validate_local_part(handle)
+
+
 def did_resolution_authority(did: str) -> str:
     if not isinstance(did, str) or any(char.isspace() for char in did) or re.search(r"%(?![0-9a-fA-F]{2})", did):
         raise AnpProtocolError("invalid_did")
@@ -174,10 +179,9 @@ def did_resolution_url(did: str, *, base_url_override: str | None = None) -> str
 def validate_single_device_document(document: Mapping[str, Any]) -> SingleDeviceManifest | None:
     """Validate public identity roles without enabling encrypted messaging.
 
-    ANP 1.0.3 treats Group Base v2 and previously published all-v2 foundations
-    as read-only drafts in its Manifest builder. Normalize those foundations
-    only in a private copy used for structural/key-role validation;
-    the caller's signed document and all stored/wire profiles stay unchanged.
+    Validate the original Manifest with the published SDK. Historical draft
+    profile bundles are normalized only for the SDK's canonical key-role
+    builder; the signed document and stored/wire profiles stay unchanged.
     """
     if "deviceManifest" not in document:
         return None
@@ -203,18 +207,6 @@ def validate_single_device_document(document: Mapping[str, Any]) -> SingleDevice
         raise AnpProtocolError("multiple_devices_not_supported")
     try:
         validated = copy.deepcopy(dict(document))
-        entry = validated["deviceManifest"]["devices"][0]
-        profiles = entry.get("profiles")
-        if isinstance(profiles, list) and "anp.core.binding.v2" in profiles and "anp.identity.discovery.v2" in profiles:
-            legacy = {
-                "anp.core.binding.v2": "anp.core.binding.v1",
-                "anp.identity.discovery.v2": "anp.identity.discovery.v1",
-                "anp.direct.base.v2": "anp.direct.base.v1",
-                "anp.group.base.v2": "anp.group.base.v1",
-            }
-            profiles = entry["profiles"] = [legacy.get(p, p) for p in profiles]
-        if isinstance(profiles, list) and "anp.core.binding.v1" in profiles and "anp.identity.discovery.v1" in profiles:
-            entry["profiles"] = ["anp.group.base.v1" if p == "anp.group.base.v2" else p for p in profiles]
         manifest = _sdk_validate_device_manifest(validated)
         if manifest is None or len(manifest.devices) != 1:
             raise ValueError("single Manifest device required")
@@ -236,8 +228,17 @@ def validate_single_device_document(document: Mapping[str, Any]) -> SingleDevice
         by_id = {method["id"]: method for method in methods}
         managed_fields = {"verificationMethod", "authentication", "assertionMethod", "keyAgreement", "deviceManifest", "proof"}
         base = {key: value for key, value in validated.items() if key not in managed_fields}
+        historical_foundations = {
+            "anp.core.binding.v2": "anp.core.binding.v1",
+            "anp.identity.discovery.v2": "anp.identity.discovery.v1",
+            "anp.direct.base.v2": "anp.direct.base.v1",
+        }
+        role_profiles = tuple(historical_foundations.get(p, p) for p in device.profiles)
+        if "anp.group.e2ee.v2" in role_profiles:
+            role_profiles = tuple("anp.group.base.v2" if p == "anp.group.base.v1" else p for p in role_profiles)
+        role_device = replace(device, profiles=role_profiles)
         rebuilt = _sdk_build_vnext_did_document(
-            base, root_id, by_id[root_id], device,
+            base, root_id, by_id[root_id], role_device,
             by_id[device.signing_key_id], by_id[device.e2ee_key_id],
         )
         for relation in ("authentication", "assertionMethod", "keyAgreement"):
@@ -373,7 +374,7 @@ def web_handle_resolution_url(handle: str) -> str:
 def verify_web_handle_documents(handle: str, resolution: Mapping[str, Any], document: Mapping[str, Any]) -> Any:
     """Published native-Web appendix B.4, with guarded I/O owned by the caller.
 
-    SDK 1.0.3's network WNS verifier is WBA-only. Reuse its DTO/generation and
+    The SDK's network WNS verifier is WBA-only. Reuse its DTO/generation and
     DID validators here; Web reverse binding is provider-domain based, not the
     stronger WBA exact-handle/provider-confirmed contract.
     """
@@ -645,10 +646,13 @@ def verify_origin_proof(
         raise AnpProtocolError("origin_proof_key_not_authorized")
 
     try:
+        # P1 Appendix A.3 excludes operational tracking from the Signed Request
+        # Object. Keep diagnostics on the wire/storage, outside business proof.
+        signed_meta = {key: value for key, value in meta.items() if key not in {"trace", "trace_id"}}
         result = _sdk_verify_origin_proof(
             {str(key): str(value) for key, value in origin_proof.items()},
             method,
-            dict(meta),
+            signed_meta,
             dict(body),
             did_document=_method_lookup_document(did_document),
             options=Rfc9421OriginProofVerificationOptions(expected_signer_did=expected_signer_did),

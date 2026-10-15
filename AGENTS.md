@@ -12,7 +12,7 @@ Install the locked runtime and development dependencies:
 uv sync --group dev
 ```
 
-The project pins ANP Python SDK `anp==1.0.3`; the protocol adapter fails fast when another version is loaded. Use the locked registry dependencies for verification. If the existing environment is stale or used by a running service, select a separate environment with `UV_PROJECT_ENVIRONMENT` and run `uv sync --locked --group dev`; do not silently substitute sibling SDK source through `PYTHONPATH`.
+The project pins ANP Python SDK `anp==1.0.6`; the protocol adapter fails fast when another version is loaded. Use the locked registry dependencies for verification. If the existing environment is stale or used by a running service, select a separate environment with `UV_PROJECT_ENVIRONMENT` and run `uv sync --locked --group dev`; do not silently substitute sibling SDK source through `PYTHONPATH`.
 
 Run the full local suite:
 
@@ -41,6 +41,14 @@ Use Python 3.10+ with 4-space indentation, snake_case modules/functions, PascalC
 Use `pytest` and `pytest-asyncio`. Name files `test_*.py` and test functions `test_*`. Prefer focused ASGI tests with temporary data directories before broad system tests. Run `tests/test_protocol_anp_sdk.py` for SDK/signature changes, `tests/test_route_config.py` for route/env changes, `tests/test_user_service_compat.py` plus identity/contact/profile/agent/site files for User Service compatibility, and `tests/test_messaging_surface.py`, `tests/test_direct_messages.py`, `tests/test_group_participant.py`, `tests/test_attachments.py`, or `tests/test_sync_read_state.py` for messaging changes. Public `rwiki.cn` tests must remain opt-in through `AWIKI_RUN_PUBLIC_SYSTEM_TESTS=1`.
 
 `awiki-open-server` does not support end-to-end encryption. Do not add or run successful Direct E2EE, Group E2EE, secure-message, prekey, ratchet, or encrypted-attachment flows as Open Server acceptance or release gates. Tests may verify that E2EE capabilities are disabled and that related requests return `not_supported` or `sync.lanes_not_supported`. Do not advertise P5/P6, Snapshot, or negotiation capabilities that the handlers do not implement. Cross-domain interoperability verification for this repository must use plaintext Direct and plaintext Community Group flows. E2EE tests belonging to Message Service, ANP SDK, or client repositories are outside the Open Server test scope and must be retained and run when those products are the explicit test target. Acceptance uses the official unmodified CLI; do not require `--community` or a Community-specific client.
+
+User-authorized transition (2026-10-14): acknowledge valid current-client P5/P6
+subscription requests during local sync bootstrap, and return permanently empty
+compatibility streams during delta so plaintext receiving can proceed. This
+initialization acknowledgement does not enable encrypted producers, key publication,
+ciphertext sending/storage, or encrypted attachments; their requests remain rejected.
+Keep public ANP E2EE profiles/security capabilities disabled. Verify registration and
+plaintext receiving only; do not run E2EE flows. The user will change the client later.
 
 ## Commit & Pull Request Guidelines
 

@@ -36,6 +36,13 @@ A service-to-service HTTP Signature proves that the current HTTP hop comes from 
 
 Neither layer replaces the other.
 
+Retained MessageService `meta.trace_id` and legacy `meta.trace` are diagnostics only.
+The release/0929 vnext P1 Appendix A.3 excludes operational tracking from the Signed
+Request Object. Open Server excludes these fields when verifying Origin Proof while
+preserving the original wire/storage metadata. Group Receipt payload digests and
+idempotency use the verified Origin Proof `contentDigest`. Changing a hop trace does
+not change the business operation or replace its sender, target, operation ID, or proof.
+
 For ordinary Group calls, P8 uses `meta.sender_did` as the caller anchor. For `group.incoming` and `group.state_changed`, the caller anchor is `body.group_did`. Those two methods are Notifications and are rejected if a JSON-RPC `id` is present.
 
 ## 5. Outbound Direct

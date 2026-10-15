@@ -369,8 +369,8 @@ def start_rust_cli_listener(cli_bin: str, workspace: Path, home: Path) -> subpro
     )
 
 
-def _safe_cli_diagnostic(args: tuple[str, ...], output: str = "") -> dict[str, Any]:
-    sensitive = {"--phone", "--otp", "--token", "--access-token", "--password"}
+def _safe_cli_diagnostic(args: tuple[str, ...], output: str = "", *, sensitive_values: tuple[str, ...] = ()) -> dict[str, Any]:
+    sensitive = {"--phone", "--email", "--otp", "--invite-code", "--token", "--access-token", "--password"}
     shown = ["[redacted]" if index and args[index - 1] in sensitive else value for index, value in enumerate(args)]
     shown = [value.split("=", 1)[0] + "=[redacted]" if "=" in value and value.split("=", 1)[0] in sensitive else value for value in shown]
     def scrub(value):
@@ -386,6 +386,9 @@ def _safe_cli_diagnostic(args: tuple[str, ...], output: str = "") -> dict[str, A
             for index, argument in enumerate(args):
                 if index and args[index - 1] in sensitive and argument:
                     value = value.replace(argument, "[redacted]")
+            for secret in sensitive_values:
+                if secret:
+                    value = value.replace(secret, "[redacted]")
             return value
         return value
     result = {"args": shown}
@@ -398,23 +401,25 @@ def _safe_cli_diagnostic(args: tuple[str, ...], output: str = "") -> dict[str, A
     return result
 
 
-def rust_cli_json(cli_bin: str, workspace: Path, home: Path, *args: str) -> dict[str, Any]:
+def rust_cli_json(cli_bin: str, workspace: Path, home: Path, *args: str, input_data: dict[str, str] | None = None) -> dict[str, Any]:
     env = rust_cli_env(workspace, home)
+    sensitive_values = tuple(input_data.values()) if input_data is not None else ()
     completed = subprocess.run(
         [cli_bin, *args],
         check=False,
         capture_output=True,
         text=True,
         env=env,
+        input=json.dumps(input_data) if input_data is not None else None,
     )
     if completed.returncode != 0:
         raise RuntimeError(
             "rust cli command failed: "
             + json.dumps(
                 {
-                    **_safe_cli_diagnostic(args, completed.stdout),
+                    **_safe_cli_diagnostic(args, completed.stdout, sensitive_values=sensitive_values),
                     "returncode": completed.returncode,
-                    "stderr": _safe_cli_diagnostic(args, completed.stderr),
+                    "stderr": _safe_cli_diagnostic(args, completed.stderr, sensitive_values=sensitive_values),
                 },
                 ensure_ascii=False,
             )
@@ -424,14 +429,33 @@ def rust_cli_json(cli_bin: str, workspace: Path, home: Path, *args: str) -> dict
     except json.JSONDecodeError as exc:
         raise RuntimeError(
             "rust cli command returned non-json output: "
-            + json.dumps(_safe_cli_diagnostic(args, completed.stdout), ensure_ascii=False)
+            + json.dumps(_safe_cli_diagnostic(args, completed.stdout, sensitive_values=sensitive_values), ensure_ascii=False)
         ) from exc
     if parsed.get("ok") is not True:
         raise RuntimeError(
             "rust cli command returned ok=false: "
-            + json.dumps(_safe_cli_diagnostic(args, completed.stdout), ensure_ascii=False)
+            + json.dumps(_safe_cli_diagnostic(args, completed.stdout, sensitive_values=sensitive_values), ensure_ascii=False)
         )
     return parsed
+
+
+def register_rust_cli_identity(
+    cli_bin: str, workspace: Path, home: Path, *, handle: str, server_data_dir: Path,
+) -> dict[str, Any]:
+    """Use the unmodified CLI's two-step registration and local operator code."""
+    phone = "+1555" + str(uuid.uuid4().int % 10_000_000).zfill(7)
+    args = ("id", "register", "--handle", handle, "--verification-stdin")
+    rust_cli_json(cli_bin, workspace, home, *args, input_data={"phone": phone})
+    path = server_data_dir / "local-registration-otp" / re.sub(r"[^0-9A-Za-z]+", "_", phone)
+    if not path.is_file():
+        raise RuntimeError("Open Server did not create the local registration operator code")
+    otp = path.read_text().strip()
+    if not re.fullmatch(r"[0-9]{6}", otp):
+        raise RuntimeError("Open Server created an invalid local registration operator code")
+    result = rust_cli_json(cli_bin, workspace, home, *args, input_data={"phone": phone, "otp": otp})
+    rust_register_did(result)
+    path.unlink()
+    return result
 
 
 def initialize_rust_cli_workspace(
@@ -755,50 +779,23 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
         alice_handle = unique_handle(f"{prefix}-alice")
         bob_handle = unique_handle(f"{prefix}-bob")
         charlie_handle = unique_handle(f"{prefix}-charlie")
-        alice_register = rust_cli_json(
-            cli_bin,
-            alice_workspace,
-            home,
-            "id",
-            "register",
-            "--handle",
-            alice_handle,
-            "--community",
-        )
-        bob_register = rust_cli_json(
-            cli_bin,
-            bob_workspace,
-            home,
-            "id",
-            "register",
-            "--handle",
-            bob_handle,
-            "--community",
-        )
-        charlie_register = rust_cli_json(
-            cli_bin,
-            charlie_workspace,
-            home,
-            "id",
-            "register",
-            "--handle",
-            charlie_handle,
-            "--community",
-        )
+        alice_register = register_rust_cli_identity(cli_bin, alice_workspace, home, handle=alice_handle, server_data_dir=root / "server")
+        bob_register = register_rust_cli_identity(cli_bin, bob_workspace, home, handle=bob_handle, server_data_dir=root / "server")
+        charlie_register = register_rust_cli_identity(cli_bin, charlie_workspace, home, handle=charlie_handle, server_data_dir=root / "server")
         alice_did = rust_register_did(alice_register)
         bob_did = rust_register_did(bob_register)
         charlie_did = rust_register_did(charlie_register)
 
         direct_text = "hello from rust cli local smoke"
-        direct_send = rust_cli_json(cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did, "--text", direct_text)
+        direct_send = rust_cli_json(cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did, "--text", direct_text, "--secure", "off")
         direct_message_id = rust_message_id(direct_send)
         direct_text_two = "second unread message for batch mark-read"
         direct_message_two = rust_message_id(
-            rust_cli_json(cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did, "--text", direct_text_two)
+            rust_cli_json(cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did, "--text", direct_text_two, "--secure", "off")
         )
         direct_text_three = "third unread message for batch mark-read"
         direct_message_three = rust_message_id(
-            rust_cli_json(cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did, "--text", direct_text_three)
+            rust_cli_json(cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did, "--text", direct_text_three, "--secure", "off")
         )
         bob_inbox = rust_cli_json(cli_bin, bob_workspace, home, "msg", "inbox", "--scope", "direct", "--limit", "10")
         bob_history = retry_rust_cli_json(cli_bin, bob_workspace, home, "msg", "history", "--with", alice_did, "--limit", "10")
@@ -834,7 +831,7 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
                 raise RuntimeError(f"rust cli history did not project is_read=true for {marked_id}")
         page_mark_text = "message read through inbox --mark-read"
         page_mark_id = rust_message_id(
-            rust_cli_json(cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did, "--text", page_mark_text)
+            rust_cli_json(cli_bin, alice_workspace, home, "msg", "send", "--to", bob_did, "--text", page_mark_text, "--secure", "off")
         )
         page_unread_before = rust_cli_json(
             cli_bin, bob_workspace, home, "msg", "inbox", "--scope", "direct", "--unread", "--limit", "20"
@@ -1000,7 +997,7 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
             "--text",
             alice_group_text,
             "--client-message-id",
-            alice_client_message_id,
+            alice_client_message_id, "--secure", "off",
         )
         alice_group_message_id = rust_message_id(alice_group_send)
         if alice_group_message_id != alice_client_message_id:
@@ -1018,7 +1015,7 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
             "--text",
             bob_group_text,
             "--client-message-id",
-            f"msg-{uuid.uuid4().hex}",
+            f"msg-{uuid.uuid4().hex}", "--secure", "off",
         )
         bob_group_message_id = rust_message_id(bob_group_send)
         for workspace in (alice_workspace, bob_workspace, charlie_workspace):
@@ -1152,7 +1149,7 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
             "--group",
             group_did,
             "--text",
-            "must fail after leave",
+            "must fail after leave", "--secure", "off",
             expected=None,
         )
         rust_cli_json(
@@ -1187,7 +1184,7 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
             "--group",
             group_did,
             "--text",
-            "must fail after removal",
+            "must fail after removal", "--secure", "off",
             expected=None,
         )
 
@@ -1232,7 +1229,7 @@ def smoke_rust_cli_local(args: argparse.Namespace) -> int:
                 "verified": not args.skip_attachments,
             },
             "verified": [
-                "rust cli id register via /user-service/v1/did-auth/rpc with placeholder phone/otp CLI args; server does not run contact verification",
+                "standard two-step CLI id register via /user-service/v1/did-auth/rpc using local operator codes over stdin; no contact verification",
                 "direct msg send, inbox, and history through /im/rpc",
                 "direct single, batch, idempotent, unauthorized, and restart-persistent mark-read; page side-effect is CLI-declared unsupported",
                 *([] if args.skip_attachments else ["direct and group attachment send/download with byte-for-byte verification"]),
@@ -1403,16 +1400,10 @@ def smoke_rust_cli_realtime_restart(args: argparse.Namespace) -> int:
         alice_handle = unique_handle("realtime-alice")
         bob_handle = unique_handle("realtime-bob")
         alice_did = rust_register_did(
-            rust_cli_json(
-                cli_bin, alice_workspace, home, "id", "register", "--handle", alice_handle,
-                "--community",
-            )
+            register_rust_cli_identity(cli_bin, alice_workspace, home, handle=alice_handle, server_data_dir=root / "server")
         )
         bob_did = rust_register_did(
-            rust_cli_json(
-                cli_bin, bob_workspace, home, "id", "register", "--handle", bob_handle,
-                "--community",
-            )
+            register_rust_cli_identity(cli_bin, bob_workspace, home, handle=bob_handle, server_data_dir=root / "server")
         )
         created_group = rust_cli_json(
             cli_bin, alice_workspace, home, "group", "create", "--name", "Realtime Restart Gate",
@@ -1499,7 +1490,11 @@ def smoke_rust_cli_realtime_restart(args: argparse.Namespace) -> int:
         )
         wait_file_contains(notify_file, [direct_after_restart])
 
-        history = rust_cli_json(cli_bin, bob_workspace, home, "msg", "history", "--with", alice_did, "--limit", "50")
+        # The listener bridge needs an explicit identity for these local reads.
+        history = rust_cli_json(
+            cli_bin, bob_workspace, home, "--identity", bob_handle,
+            "msg", "history", "--with", alice_did, "--limit", "50",
+        )
         for message_id, text_value in (
             (direct_one, "realtime direct while connected"),
             (direct_offline, "direct while listener stopped"),
@@ -1507,7 +1502,8 @@ def smoke_rust_cli_realtime_restart(args: argparse.Namespace) -> int:
         ):
             assert_message_visible(history, message_id=message_id, text=text_value)
         group_messages = rust_cli_json(
-            cli_bin, bob_workspace, home, "group", "messages", "--group", group_did, "--limit", "50"
+            cli_bin, bob_workspace, home, "--identity", bob_handle,
+            "group", "messages", "--group", group_did, "--limit", "50"
         )
         assert_message_visible(group_messages, message_id=group_one, text="realtime group while connected")
         assert_message_visible(group_messages, message_id=group_offline, text="group while listener stopped")
@@ -1631,14 +1627,8 @@ def smoke_rust_cli_cross_domain(args: argparse.Namespace) -> int:
         )
         alice_handle = unique_handle("cross-alice")
         bob_handle = unique_handle("cross-bob")
-        alice_did = rust_register_did(rust_cli_json(
-            cli_bin, alice_workspace, home, "id", "register", "--handle", alice_handle,
-            "--community",
-        ))
-        bob_did = rust_register_did(rust_cli_json(
-            cli_bin, bob_workspace, home, "id", "register", "--handle", bob_handle,
-            "--community",
-        ))
+        alice_did = rust_register_did(register_rust_cli_identity(cli_bin, alice_workspace, home, handle=alice_handle, server_data_dir=root / "source-server"))
+        bob_did = rust_register_did(register_rust_cli_identity(cli_bin, bob_workspace, home, handle=bob_handle, server_data_dir=root / "target-server"))
         # Establish each single-device Sync v2 binding before creating remote
         # events so the test exercises delta delivery rather than a late first
         # bootstrap at the account tail.
@@ -1751,12 +1741,7 @@ def smoke_rust_cli_cross_domain(args: argparse.Namespace) -> int:
 
 
 def smoke_rust_cli_connect(args: argparse.Namespace) -> int:
-    """Prove that a clean current CLI can configure, register, and write to Open Server.
-
-    This deliberately remains a narrow connection-and-write check.  Inbox/history use
-    Open Server's restricted single-device anp.sync.local.v2 contract and are exercised
-    by smoke-rust-cli-local instead.
-    """
+    """Verify standard registration and plaintext messaging with clean CLI workspaces."""
     cli_bin = resolve_executable(args.awiki_cli_bin)
     port = args.port or free_port()
     did_domain = args.did_domain
@@ -1789,26 +1774,8 @@ def smoke_rust_cli_connect(args: argparse.Namespace) -> int:
                 did_domain=did_domain,
             )
         prefix = args.handle_prefix
-        alice_register = rust_cli_json(
-            cli_bin,
-            alice_workspace,
-            home,
-            "id",
-            "register",
-            "--handle",
-            unique_handle(f"{prefix}-alice"),
-            "--community",
-        )
-        bob_register = rust_cli_json(
-            cli_bin,
-            bob_workspace,
-            home,
-            "id",
-            "register",
-            "--handle",
-            unique_handle(f"{prefix}-bob"),
-            "--community",
-        )
+        alice_register = register_rust_cli_identity(cli_bin, alice_workspace, home, handle=unique_handle(f"{prefix}-alice"), server_data_dir=root / "server")
+        bob_register = register_rust_cli_identity(cli_bin, bob_workspace, home, handle=unique_handle(f"{prefix}-bob"), server_data_dir=root / "server")
         alice_did = rust_register_did(alice_register)
         bob_did = rust_register_did(bob_register)
         sent = rust_cli_json(
@@ -1820,30 +1787,66 @@ def smoke_rust_cli_connect(args: argparse.Namespace) -> int:
             "--to",
             bob_did,
             "--text",
-            "open server latest cli connection probe",
+            "open server latest cli connection probe", "--secure", "off",
+        )
+        direct_id = rust_message_id(sent)
+        assert_message_visible(
+            rust_cli_json(cli_bin, bob_workspace, home, "msg", "inbox", "--scope", "direct", "--limit", "20"),
+            message_id=direct_id, text="open server latest cli connection probe",
+        )
+        assert_message_visible(
+            rust_cli_json(cli_bin, bob_workspace, home, "msg", "history", "--with", alice_did, "--limit", "20"),
+            message_id=direct_id, text="open server latest cli connection probe",
+        )
+        reply_text = "plaintext reply from the second CLI identity"
+        reply_id = rust_message_id(rust_cli_json(
+            cli_bin, bob_workspace, home, "msg", "send", "--to", alice_did, "--text", reply_text, "--secure", "off",
+        ))
+        assert_message_visible(
+            rust_cli_json(cli_bin, alice_workspace, home, "msg", "inbox", "--scope", "direct", "--limit", "20"),
+            message_id=reply_id, text=reply_text,
+        )
+        group_did = rust_group_did(rust_cli_json(
+            cli_bin, alice_workspace, home, "group", "create", "--name", "Plaintext compatibility",
+            "--discoverability", "private", "--admission-mode", "admin-add", "--max-members", "10",
+        ))
+        rust_cli_json(cli_bin, alice_workspace, home, "group", "add", "--group", group_did, "--member", bob_did, "--role", "member")
+        group_text = "plaintext group message after compatibility initialization"
+        group_id = rust_message_id(rust_cli_json(
+            cli_bin, bob_workspace, home, "msg", "send", "--group", group_did, "--text", group_text, "--secure", "off",
+        ))
+        assert_message_visible(
+            rust_cli_json(cli_bin, alice_workspace, home, "group", "messages", "--group", group_did, "--limit", "20"),
+            message_id=group_id, text=group_text,
         )
         print(
             json.dumps(
                 {
                     "ok": True,
                     "mode": "rust-cli-connect",
-                    "scope": "connection-and-write",
+                    "scope": "registration-and-plaintext-messaging",
                     "base_url": base_url,
                     "did_domain": did_domain,
                     "cli_bin": cli_bin,
                     "cli_artifact_sha256": artifact_sha256,
                     "cli_version": cli_version.get("data"),
+                    "open_server": open_server_provenance(),
                     "alice_did": alice_did,
                     "bob_did": bob_did,
-                    "message_id": rust_message_id(sent),
+                    "message_id": direct_id,
+                    "reply_message_id": reply_id,
+                    "group_did": group_did,
+                    "group_message_id": group_id,
                     "verified": [
                         "clean CLI workspaces configured the Open Server tenant",
                         "two identities registered through /user-service/v1/did-auth/rpc",
                         "plaintext Direct write completed through /im/rpc",
+                        "plaintext Direct was received through sync v2 and visible in history",
+                        "the second identity sent a plaintext reply visible in the first inbox",
+                        "plaintext Group create/add/send/read completed using the official CLI",
                     ],
                     "not_verified": [
-                        "inbox/history and restricted single-device sync v2: exercised by smoke-rust-cli-local, not this narrow check",
-                        "group journeys are exercised separately by smoke-rust-cli-local; attachment and realtime/restart remain separate gates",
+                        "full group management, attachments, realtime listener, and restart remain separate gates",
                     ],
                 },
                 ensure_ascii=False,

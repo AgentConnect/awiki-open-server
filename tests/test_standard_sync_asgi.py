@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+import httpx
 import pytest
 
+from awiki_open_server.app.main import create_app
 from awiki_open_server.messaging.sync_contract import SNAPSHOT_GROUP_FIELDS, group_snapshot
 from tests.conftest import rpc
 from tests.helpers import register, sign_did_document, single_device_document
@@ -84,7 +87,7 @@ async def test_extended_empty_lane_bootstrap_advertises_schema3_snapshot(client)
 
 
 @pytest.mark.asyncio
-async def test_p5_p6_bootstrap_is_explicitly_rejected(client):
+async def test_standard_client_subscriptions_leave_plaintext_sync_usable(client):
     owner, token, _, _ = await _register_single_device(client, "lane-owner")
     response = await rpc(
         client,
@@ -108,8 +111,44 @@ async def test_p5_p6_bootstrap_is_explicitly_rejected(client):
         ),
         token=token,
     )
-    assert response["error"]["message"] == "sync.lanes_not_supported"
-    assert response["error"]["data"]["details"]["supported"] == []
+    result = response["result"]
+    assert result["mode"] == "tail_only"
+    assert result["p6_delivery"] == {
+        "profile": "p6.delivery_context.v1", "client_instance_id": "install-lanes", "activated": True,
+    }
+    with client._transport.app.state.store.connect() as conn:
+        saved = conn.execute("SELECT negotiated_json FROM sync_capability_negotiations WHERE client_instance_id='install-lanes'").fetchone()
+    assert json.loads(saved[0]) == result["sync_capabilities"]
+    delta_body = {
+        "cursor": result["cursor"], "limit": 100, "reason": "session_start",
+        "lanes": result["lanes"],
+        "p6_delivery": {"profile": "p6.delivery_context.v1", "client_instance_id": "install-lanes"},
+    }
+    peer, peer_token = await register(client, "compat-plain-peer")
+    sent = await rpc(client, "/im/rpc", "direct.send", {"recipient_did": owner, "text": "ordinary plaintext"}, token=peer_token)
+    delta = await rpc(client, "/im/rpc", "sync.delta", _v2_params(owner, "compat-plain-delta", delta_body), token=token)
+    events = delta["result"]["events"]
+    assert any(event.get("payload", {}).get("client_message_id") == sent["result"]["message_id"] for event in events)
+    assert all(section["events"] == [] and section["next_cursor"]["scan_seq"] == "0" for section in delta["result"]["lanes"].values())
+    restarted = create_app(client._transport.app.state.settings)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=restarted), base_url="http://testserver") as after_restart:
+        replay = await rpc(after_restart, "/im/rpc", "sync.delta", _v2_params(owner, "compat-after-restart", delta_body), token=token)
+        assert replay["result"]["lanes"] == delta["result"]["lanes"]
+        assert replay["result"]["events"] == events
+    delta_body["p6_delivery"]["client_instance_id"] = "different-installation"
+    denied = await rpc(client, "/im/rpc", "sync.delta", _v2_params(owner, "wrong-compat-instance", delta_body), token=token)
+    assert denied["error"]["message"] == "sync.invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_plaintext_sync_rejects_unnegotiated_subscription_cursor(client):
+    owner, token, _, _ = await _register_single_device(client, "unnegotiated-compat")
+    bootstrap = (await extended_bootstrap(client, owner, token))["result"]
+    response = await rpc(client, "/im/rpc", "sync.delta", _v2_params(owner, "unnegotiated-delta", {
+        "cursor": bootstrap["cursor"], "limit": 100, "reason": "session_start",
+        "lanes": {"p5_device": {"cursor": {"stream_epoch": "1", "scan_seq": "0"}, "committed_seq": "0"}},
+    }), token=token)
+    assert response["error"]["message"] == "sync.invalid_request"
 
 
 @pytest.mark.asyncio

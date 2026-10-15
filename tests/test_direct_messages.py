@@ -28,6 +28,32 @@ def signed_direct(meta: dict, body: dict, private_key: ed25519.Ed25519PrivateKey
         "body": body,
     }
 
+
+@pytest.mark.asyncio
+async def test_plaintext_diagnostic_trace_is_outside_origin_proof_and_idempotency(client):
+    alice_did, alice_token, alice_key, _ = await register_with_key(client, "trace-alice")
+    bob_did, _ = await register(client, "trace-bob")
+    business_meta = {
+        "profile": "anp.direct.base.v1", "security_profile": "transport-protected",
+        "sender_did": alice_did, "target": {"kind": "agent", "did": bob_did},
+        "operation_id": "trace-operation", "message_id": "trace-message", "content_type": "text/plain",
+    }
+    body = {"text": "plain message with transport diagnostics"}
+    payload = signed_direct(business_meta, body, alice_key)
+    payload["meta"] = {**business_meta, "trace_id": "first-hop"}
+    sent = await rpc(client, "/im/rpc", "direct.send", payload, token=alice_token)
+    assert sent["result"]["accepted"] is True
+    payload["meta"]["trace_id"] = "retry-hop"
+    replay = await rpc(client, "/im/rpc", "direct.send", payload, token=alice_token)
+    assert replay["result"]["message_id"] == sent["result"]["message_id"]
+    with client._transport.app.state.store.connect() as conn:
+        rows = conn.execute("SELECT meta_json FROM direct_messages WHERE operation_id='trace-operation'").fetchall()
+    assert len(rows) == 1
+    assert json.loads(rows[0]["meta_json"])["trace_id"] == "first-hop"
+    payload["body"] = {"text": "tampered business content"}
+    denied = await rpc(client, "/im/rpc", "direct.send", payload, token=alice_token)
+    assert "error" in denied
+
 @pytest.mark.asyncio
 async def test_inbox_mark_read_updates_owner_view_and_filters_default_inbox(client):
     alice_did, alice_token = await register(client, "read-alice")

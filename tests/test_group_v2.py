@@ -82,6 +82,21 @@ async def test_group_v2_leave_replay_adds_standard_acceptance_without_resigning_
 
 
 @pytest.mark.asyncio
+async def test_group_receipt_and_replay_exclude_diagnostic_trace(client):
+    owner = await register_with_key(client, "trace-group-owner")
+    body = {"group_profile": {"display_name": "Trace Group"}, "group_policy": copy.deepcopy(POLICY)}
+    payload = envelope("group.create", owner[0], owner[2], "did:wba:testserver", "trace-group-create", body)
+    payload["meta"]["trace_id"] = "host-first-hop"
+    created = await rpc(client, "/im/rpc", "group.create", payload, token=owner[1])
+    result = created["result"]
+    assert result["group_receipt"]["payload_digest"] == payload["auth"]["origin_proof"]["contentDigest"]
+    payload["meta"]["trace_id"] = "host-retry-hop"
+    replay = await rpc(client, "/im/rpc", "group.create", payload, token=owner[1])
+    assert replay["result"]["idempotent_replay"] is True
+    assert replay["result"]["group_receipt"] == result["group_receipt"]
+
+
+@pytest.mark.asyncio
 async def test_group_v2_lifecycle_uses_did_members_and_preserves_application_payload(client):
     owner = await register_with_key(client, "v2-owner")
     member = await register_with_key(client, "v2-member")

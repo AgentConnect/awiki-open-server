@@ -23,26 +23,27 @@ def test_empty_extended_bootstrap_is_accepted():
     assert caps.requested == ()
 
 
-def test_requested_p5_p6_are_rejected_without_subset():
-    with pytest.raises(SyncProtocolError) as raised:
-        standard_sync.parse_bootstrap_capabilities(
-            {
-                "client_instance_id": "install-1",
-                "capabilities": {
-                    "sync_profile": "anp.sync.local.v2",
-                    "event_schema_max": 1,
-                    "requested_sync_capabilities": [
-                        "lanes.p5_device.v1",
-                        "lanes.p6_group.v1",
-                        "p6.delivery_context.v1",
-                    ],
-                    "requested_snapshot_capabilities": {"schema_max": 3, "deliveries": ["paged_v1"]},
-                    "p6_delivery": "p6.delivery_context.v1",
-                },
-            }
-        )
-    assert raised.value.anp_code == "sync.lanes_not_supported"
-    assert raised.value.data["details"]["supported"] == []
+def test_standard_client_subscriptions_are_acknowledged_as_empty_streams():
+    requested = ["lanes.p5_device.v1", "lanes.p6_group.v1", "p6.delivery_context.v1"]
+    caps = standard_sync.parse_bootstrap_capabilities({
+        "client_instance_id": "install-1",
+        "capabilities": {
+            "sync_profile": "anp.sync.local.v2", "event_schema_max": 1,
+            "requested_sync_capabilities": requested,
+            "requested_snapshot_capabilities": {"schema_max": 3, "deliveries": ["paged_v1"]},
+            "p6_delivery": "p6.delivery_context.v1",
+        },
+    })
+    assert caps.requested == tuple(requested)
+    assert caps.p6_delivery is True
+    result = standard_sync.attach_standard_bootstrap_fields(
+        {}, snapshot_paging=caps.snapshot_paging, requested=caps.requested, client_instance_id=caps.client_instance_id,
+    )
+    assert result["sync_capabilities"] == requested
+    assert result["lanes"] == {
+        name: {"cursor": {"stream_epoch": "1", "scan_seq": "0"}, "committed_seq": "0"}
+        for name in ("p5_device", "p6_group")
+    }
 
 
 def _plain_message(seq: str) -> dict:

@@ -22,14 +22,14 @@ The committed `.python-version` selects Python 3.10; `uv` can provision it when 
 uv sync --group dev
 ```
 
-The dependency set pins ANP Python SDK `anp==0.9.2`; the adapter fails fast on another version. In a controlled development environment only, a sibling checkout may be used explicitly:
+The dependency set pins published ANP Python SDK `anp==1.0.6`; the adapter fails fast on another version. If the existing environment is stale or serves a running process, verify locked registry packages in a separate environment:
 
 ```bash
-PYTHONPATH=../anp/anp:src \
-uv run pytest tests -q
+UV_PROJECT_ENVIRONMENT=/tmp/awiki-open-server-venv uv sync --locked --group dev
+UV_PROJECT_ENVIRONMENT=/tmp/awiki-open-server-venv uv run --locked pytest tests -q
 ```
 
-This is not a public-deployment default.
+Do not replace the registry SDK with a sibling source checkout through `PYTHONPATH`.
 
 ## 4. Start
 
@@ -121,7 +121,7 @@ The CLI verifies the selected Home's complete Community declaration before regis
 First run the clean-workspace connection-and-write gate. It verifies tenant configuration, two registrations through canonical User Service v1, and a plaintext Direct write, while recording CLI build metadata and the artifact SHA-256:
 
 ```bash
-PYTHONPATH=../anp/anp:src \
+PYTHONPATH=src \
 uv run python scripts/awiki_open_cli.py smoke-rust-cli-connect \
   --awiki-cli-bin /path/to/pinned/awiki-cli \
   --data-root /tmp/awiki-open-server-rust-cli-connect \
@@ -131,21 +131,21 @@ uv run python scripts/awiki_open_cli.py smoke-rust-cli-connect \
 Then run the complete local, Realtime/restart, and two-domain gates:
 
 ```bash
-PYTHONPATH=../anp/anp:src \
+PYTHONPATH=src \
 uv run python scripts/awiki_open_cli.py smoke-rust-cli-local \
   --awiki-cli-bin /path/to/awiki-cli \
   --data-root /tmp/awiki-open-server-rust-cli-local \
   --standard-https \
   --clean
 
-PYTHONPATH=../anp/anp:src uv run python scripts/awiki_open_cli.py \
+PYTHONPATH=src uv run python scripts/awiki_open_cli.py \
   smoke-rust-cli-realtime-restart --awiki-cli-bin /path/to/awiki-cli --clean
 
-PYTHONPATH=../anp/anp:src uv run python scripts/awiki_open_cli.py \
+PYTHONPATH=src uv run python scripts/awiki_open_cli.py \
   smoke-rust-cli-cross-domain --awiki-cli-bin /path/to/awiki-cli --clean
 ```
 
-As verified on 2026-08-08, `awiki-cli` 1.0.43 commit `bbeb8a5c` passes these gates. Inbox/History uses `anp.sync.local.v2` for one DID, exactly one registered device, and one client instance. Empty accounts may tail-only bootstrap from the retained event stream; log gaps and expired cursors use Schema 3 paged Snapshot, then ordinary delta, batch hydration, and thread catch-up. Open Server rejects a second device/client instance and does not implement device sharing, multi-device cursor convergence, or E2EE. Official CLI 1.0.52 requests P5/P6; the server returns `sync.lanes_not_supported`. The standard-HTTPS and cross-domain commands use an isolated Linux network namespace and require `unshare`, `mount`, and `ip`. Record the CLI commit, binary digest, server commit, and exact gate used.
+As verified on 2026-08-08, `awiki-cli` 1.0.43 commit `bbeb8a5c` passes these gates. Inbox/History uses `anp.sync.local.v2` for one DID, exactly one registered device, and one client instance. Empty accounts may tail-only bootstrap from the retained event stream; log gaps and expired cursors use Schema 3 paged Snapshot, then ordinary delta, batch hydration, and thread catch-up. Open Server rejects a second device/client instance and does not implement device sharing, multi-device cursor convergence, or E2EE. The 2026-10-14 transition acknowledges existing-client P5/P6 subscriptions as empty streams so plaintext sync proceeds; encrypted operations remain rejected. The standard-HTTPS and cross-domain commands use an isolated Linux network namespace and require `unshare`, `mount`, and `ip`. Record the CLI commit, binary digest, server commit, and exact gate used.
 
 ## 9. Important development switches
 
