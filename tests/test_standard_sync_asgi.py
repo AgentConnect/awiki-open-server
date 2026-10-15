@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+
 import httpx
 import pytest
 
@@ -84,10 +85,18 @@ async def test_extended_empty_lane_bootstrap_advertises_schema3_snapshot(client)
     assert result["snapshot_capability"] == {"schema": 3, "delivery": "paged_v1"}
     assert "lanes" not in result
     assert "p6_delivery" not in result
+    capabilities = (await rpc(client, "/im/rpc", "anp.get_capabilities", {}))["result"]
+    assert capabilities["features"]["ordinary_sync"]["lanes"] == []
+    assert "client_subscription_compatibility" not in capabilities["features"]["ordinary_sync"]
 
 
+@pytest.mark.parametrize("requested", [
+    ["lanes.p5_device.v1"],
+    ["lanes.p6_group.v1", "p6.delivery_context.v1"],
+    ["lanes.p5_device.v1", "lanes.p6_group.v1", "p6.delivery_context.v1"],
+])
 @pytest.mark.asyncio
-async def test_standard_client_subscriptions_leave_plaintext_sync_usable(client):
+async def test_p5_p6_bootstrap_is_explicitly_rejected(client, requested):
     owner, token, _, _ = await _register_single_device(client, "lane-owner")
     response = await rpc(
         client,
@@ -100,55 +109,55 @@ async def test_standard_client_subscriptions_leave_plaintext_sync_usable(client)
                 "client_instance_id": "install-lanes",
                 "capabilities": {
                     **EXTENDED,
-                    "requested_sync_capabilities": [
-                        "lanes.p5_device.v1",
-                        "lanes.p6_group.v1",
-                        "p6.delivery_context.v1",
-                    ],
-                    "p6_delivery": "p6.delivery_context.v1",
+                    "requested_sync_capabilities": requested,
+                    **({"p6_delivery": "p6.delivery_context.v1"} if "lanes.p6_group.v1" in requested else {}),
                 },
             },
         ),
         token=token,
     )
-    result = response["result"]
-    assert result["mode"] == "tail_only"
-    assert result["p6_delivery"] == {
-        "profile": "p6.delivery_context.v1", "client_instance_id": "install-lanes", "activated": True,
-    }
+    assert response["error"]["message"] == "sync.lanes_not_supported"
+    assert response["error"]["data"]["details"]["requested"] == requested
+    assert response["error"]["data"]["details"]["supported"] == []
     with client._transport.app.state.store.connect() as conn:
-        saved = conn.execute("SELECT negotiated_json FROM sync_capability_negotiations WHERE client_instance_id='install-lanes'").fetchone()
-    assert json.loads(saved[0]) == result["sync_capabilities"]
-    delta_body = {
-        "cursor": result["cursor"], "limit": 100, "reason": "session_start",
-        "lanes": result["lanes"],
-        "p6_delivery": {"profile": "p6.delivery_context.v1", "client_instance_id": "install-lanes"},
-    }
-    peer, peer_token = await register(client, "compat-plain-peer")
-    sent = await rpc(client, "/im/rpc", "direct.send", {"recipient_did": owner, "text": "ordinary plaintext"}, token=peer_token)
-    delta = await rpc(client, "/im/rpc", "sync.delta", _v2_params(owner, "compat-plain-delta", delta_body), token=token)
-    events = delta["result"]["events"]
-    assert any(event.get("payload", {}).get("client_message_id") == sent["result"]["message_id"] for event in events)
-    assert all(section["events"] == [] and section["next_cursor"]["scan_seq"] == "0" for section in delta["result"]["lanes"].values())
-    restarted = create_app(client._transport.app.state.settings)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=restarted), base_url="http://testserver") as after_restart:
-        replay = await rpc(after_restart, "/im/rpc", "sync.delta", _v2_params(owner, "compat-after-restart", delta_body), token=token)
-        assert replay["result"]["lanes"] == delta["result"]["lanes"]
-        assert replay["result"]["events"] == events
-    delta_body["p6_delivery"]["client_instance_id"] = "different-installation"
-    denied = await rpc(client, "/im/rpc", "sync.delta", _v2_params(owner, "wrong-compat-instance", delta_body), token=token)
-    assert denied["error"]["message"] == "sync.invalid_request"
+        assert conn.execute("SELECT COUNT(*) FROM sync_v2_bindings").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM sync_capability_negotiations").fetchone()[0] == 0
+    bootstrap = (await extended_bootstrap(client, owner, token))["result"]
+    assert bootstrap["sync_capabilities"] == []
 
 
 @pytest.mark.asyncio
-async def test_plaintext_sync_rejects_unnegotiated_subscription_cursor(client):
-    owner, token, _, _ = await _register_single_device(client, "unnegotiated-compat")
+async def test_old_empty_stream_negotiation_cannot_reenable_lanes_after_restart(client):
+    owner, token, account_id, _ = await _register_single_device(client, "old-lane-owner")
     bootstrap = (await extended_bootstrap(client, owner, token))["result"]
-    response = await rpc(client, "/im/rpc", "sync.delta", _v2_params(owner, "unnegotiated-delta", {
-        "cursor": bootstrap["cursor"], "limit": 100, "reason": "session_start",
-        "lanes": {"p5_device": {"cursor": {"stream_epoch": "1", "scan_seq": "0"}, "committed_seq": "0"}},
-    }), token=token)
-    assert response["error"]["message"] == "sync.invalid_request"
+    previous = json.dumps(["lanes.p5_device.v1", "lanes.p6_group.v1", "p6.delivery_context.v1"])
+    with client._transport.app.state.store.connect() as conn:
+        conn.execute(
+            "UPDATE sync_capability_negotiations SET requested_json=?, negotiated_json=? WHERE account_id=?",
+            (previous, previous, account_id),
+        )
+    peer, peer_token = await register(client, "plain-after-disable")
+    sent = await rpc(client, "/im/rpc", "direct.send", {"recipient_did": owner, "text": "ordinary plaintext"}, token=peer_token)
+    restarted = create_app(client._transport.app.state.settings)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=restarted), base_url="http://testserver") as after_restart:
+        body = {"cursor": bootstrap["cursor"], "limit": 100, "reason": "session_start"}
+        delta = await rpc(after_restart, "/im/rpc", "sync.delta", _v2_params(owner, "plain-after-restart", body), token=token)
+        assert any(event.get("payload", {}).get("client_message_id") == sent["result"]["message_id"] for event in delta["result"]["events"])
+        assert "lanes" not in delta["result"]
+        assert "p6_delivery" not in delta["result"]
+        section = {"cursor": {"stream_epoch": "1", "scan_seq": "0"}, "committed_seq": "0"}
+        for index, extra in enumerate((
+            {"lanes": {"p5_device": section}},
+            {"lanes": {"p6_group": section}, "p6_delivery": {"profile": "p6.delivery_context.v1", "client_instance_id": "install-primary"}},
+            {"p6_delivery": {"profile": "p6.delivery_context.v1", "client_instance_id": "install-primary"}},
+        )):
+            denied = await rpc(after_restart, "/im/rpc", "sync.delta", _v2_params(owner, f"disabled-lane-{index}", {**body, **extra}), token=token)
+            assert denied["error"]["message"] == "sync.delta_body_invalid"
+        renegotiated = (await extended_bootstrap(after_restart, owner, token))["result"]
+        assert renegotiated["sync_capabilities"] == []
+        with restarted.state.store.connect() as conn:
+            saved = conn.execute("SELECT requested_json, negotiated_json FROM sync_capability_negotiations WHERE account_id=?", (account_id,)).fetchone()
+        assert tuple(saved) == ("[]", "[]")
 
 
 @pytest.mark.asyncio

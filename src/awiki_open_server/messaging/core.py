@@ -206,7 +206,6 @@ def capabilities(_: dict[str, Any], request: Request) -> dict[str, Any]:
             "max_devices": 1,
             "max_client_instances": 1,
             "lanes": [],
-            "client_subscription_compatibility": "empty_streams",
             "history": "retained_log",
             "ws_subprotocol": "awiki.sync.event.v3",
         }
@@ -1681,23 +1680,13 @@ def _persist_negotiation(conn, *, account_id: str, device_id: str, auth_generati
             auth_generation,
             client_instance_id,
             _json(list(requested)),
-            _json(list(requested)),
+            _json([]),
             3 if snapshot else None,
             "paged_v1" if snapshot else None,
             timestamp,
             timestamp,
         ),
     )
-
-
-def _negotiated_sync_capabilities(conn, *, account_id: str, device_id: str, auth_generation: int, client_instance_id: str) -> tuple[str, ...]:
-    row = conn.execute(
-        """SELECT negotiated_json FROM sync_capability_negotiations
-           WHERE account_id=? AND device_id=? AND auth_generation=? AND client_instance_id=?
-             AND activation_state='active'""",
-        (account_id, device_id, auth_generation, client_instance_id),
-    ).fetchone()
-    return tuple(_load(row["negotiated_json"])) if row else ()
 
 
 def _negotiation_snapshot_enabled(conn, *, account_id: str, device_id: str, auth_generation: int, client_instance_id: str) -> bool:
@@ -1851,11 +1840,6 @@ def _issue_snapshot_recovery(
             ),
         },
         snapshot_paging=True,
-        requested=_negotiated_sync_capabilities(
-            conn, account_id=account_id, device_id=device_id,
-            auth_generation=auth_generation, client_instance_id=client_instance_id,
-        ),
-        client_instance_id=client_instance_id,
     )
 
 
@@ -1933,10 +1917,7 @@ def sync_bootstrap_v2(params: dict[str, Any], request: Request) -> dict[str, Any
         "group_state_baseline": groups,
         "warnings": [] if caps.extended else ["single_device_pull_only"],
     }
-    return standard_sync.attach_standard_bootstrap_fields(
-        result, snapshot_paging=caps.snapshot_paging,
-        requested=caps.requested, client_instance_id=caps.client_instance_id,
-    )
+    return standard_sync.attach_standard_bootstrap_fields(result, snapshot_paging=caps.snapshot_paging)
 
 
 def _sync_v2_event(row: Any, *, owner: str, account_id: str, conn: Any, epoch: str) -> dict[str, Any]:
@@ -2035,7 +2016,7 @@ def _sync_v2_event(row: Any, *, owner: str, account_id: str, conn: Any, epoch: s
 def sync_delta_v2(params: dict[str, Any], request: Request) -> dict[str, Any]:
     owner, account_id, device_id = _sync_v2_identity(request, params)
     body = params.get("_anp_body") if isinstance(params.get("_anp_body"), dict) else params
-    if not {"cursor", "limit", "reason"} <= set(body) or set(body) - {"cursor", "limit", "reason", "lanes", "p6_delivery"}:
+    if set(body) != {"cursor", "limit", "reason"}:
         raise InvalidParams("sync.delta_body_invalid")
     cursor = body.get("cursor")
     if not isinstance(cursor, dict) or set(cursor) != {"stream_epoch", "scan_seq"}:
@@ -2051,14 +2032,6 @@ def sync_delta_v2(params: dict[str, Any], request: Request) -> dict[str, Any]:
         binding = conn.execute("SELECT * FROM sync_v2_bindings WHERE owner_did=? AND device_id=? AND account_id=?", (owner, device_id, account_id)).fetchone()
         if not binding:
             raise InvalidParams("SYNC_BOOTSTRAP_REQUIRED")
-        compatibility_lanes = standard_sync.empty_compat_delta_lanes(
-            body,
-            negotiated=_negotiated_sync_capabilities(
-                conn, account_id=account_id, device_id=device_id,
-                auth_generation=_auth_generation(request), client_instance_id=binding["client_instance_id"],
-            ),
-            client_instance_id=binding["client_instance_id"],
-        )
         epoch = str(binding["stream_epoch"])
         if cursor["stream_epoch"] != epoch:
             if _negotiation_snapshot_enabled(
@@ -2135,12 +2108,9 @@ def sync_delta_v2(params: dict[str, Any], request: Request) -> dict[str, Any]:
                     continue
             events.append(event)
         next_seq = str(scanned[-1]["event_seq"]) if scanned else str(after)
-    result = {"mode": "delta", "server_time": now_iso(), "events": events,
-              "next_cursor": {"stream_epoch": epoch, "scan_seq": next_seq}, "has_more": has_more,
-              "recovery": None, "warnings": ["single_device_pull_only"]}
-    if compatibility_lanes:
-        result["lanes"] = compatibility_lanes
-    return result
+    return {"mode": "delta", "server_time": now_iso(), "events": events,
+            "next_cursor": {"stream_epoch": epoch, "scan_seq": next_seq}, "has_more": has_more,
+            "recovery": None, "warnings": ["single_device_pull_only"]}
 
 
 def _sync_delta_v1(params: dict[str, Any], request: Request) -> dict[str, Any]:

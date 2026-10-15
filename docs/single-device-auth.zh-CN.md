@@ -60,17 +60,16 @@ App `server-info` 不把本地 operator code 描述为手机号验证，不发�
 CLI smoke 的验证材料通过 stdin 传递，输出前按实际材料脱敏，成功后移除对应本地 operator
 code 文件。
 
-2026-10-13 的 CLI 1.0.57 接收初始化曾因 P5/P6 请求被拒绝。用户于 2026-10-14 授权
-先回复初始化成功：bootstrap 持久化当前唯一设备/安装的订阅集合，兼容流始终是序列 0 的
-空流；delta 校验协商集合与安装上下文，普通消息通过原 ordinary stream 处理。
-对应 WebSocket 子协议需要有效 Bearer、相同安装 header 和当前授权代次的协商记录，
-连接存续期间继续复核。该处理不新增加密生产者、密文持久化或密钥业务；公开 E2EE 能力
-仍为关闭。没有关闭身份检查、改变 token scope、编辑客户端数据库或修改客户端源码。
-2026-10-15，正式 CLI 1.0.58 的完整 listener/服务端重启门禁、真实 aWIKI ME 0.1.38+49
+release/1014 按 2026-10-15 用户要求撤销 2026-10-14 临时空流兼容。P5/P6 bootstrap 返回
+`sync.lanes_not_supported`，delta 不接受相关游标，P6 delivery-context WebSocket 子协议
+不接受；旧协商记录在服务重启后也不能重新启用。普通同步、Schema 3 Snapshot、唯一设备/
+安装绑定及 token 校验保留。没有改变设备 Manifest 的原始签名或修改客户端源码。
+
+历史上，在 `09d38fd` 临时兼容状态下，正式 CLI 1.0.58 的完整 listener/服务端重启门禁、真实 aWIKI ME 0.1.38+49
 的注册及明文 Direct/Group 双向收发与 App 重启恢复、真实 MessageService 的 Direct 双向
 及两个普通群 Host 方向均已验证。App 使用专用测试号码走免验证码注册；空手机号仍被
 客户端本地校验拒绝。聚焦范围、初次失败与重试、制品和远端清理残留见
-[客户端兼容性](client-compatibility.zh-CN.md#release0929-对齐状态)，不代表 App 全量功能通过。
+[客户端兼容性](client-compatibility.zh-CN.md)，这些记录不代表关闭 P5/P6 后的客户端接入或 App 全量功能通过。
 
 业务 Origin Proof 保留 sender/target/profile/operation/body 的认证绑定，按 P1 Appendix A.3
 排除 `trace_id` 和历史 `trace` 运维字段。这两个诊断字段不进入群操作幂等 digest 或 Receipt

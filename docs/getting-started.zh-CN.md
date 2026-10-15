@@ -178,8 +178,9 @@ PYTHONPATH=src uv run python scripts/awiki_open_cli.py \
 cross-domain Gate。`msg inbox/history` 使用 `anp.sync.local.v2`：一个 DID、恰好一个注册设备、一个
 client instance。空账号可以 tail-only bootstrap；日志缺口和过期 cursor 走 Schema 3 分页
 Snapshot，再接普通 delta、batch hydration 和 thread catch-up。Open Server 会拒绝第二个设备/client
-instance，不支持设备间共享、多设备游标收敛或 E2EE。2026-10-14 用户授权现有客户端的 P5/P6
-订阅初始化成功、后续返回空流，明文继续同步，加密业务仍拒绝。standard-HTTPS 与 cross-domain 命令使用隔离的 Linux 网络命名空间，需要
+instance，不支持设备间共享、多设备游标收敛或 E2EE。release/1014 已移除 P5/P6 临时空流
+兼容，相关 bootstrap 请求返回 `sync.lanes_not_supported`；即使发送明文，客户端也必须只协商
+普通同步。standard-HTTPS 与 cross-domain 命令使用隔离的 Linux 网络命名空间，需要
 `unshare`、`mount` 和 `ip`。验证记录必须包含 CLI commit、二进制摘要、Open Server commit 和实际执行的 Gate。
 
 ## 9. 重要开发开关

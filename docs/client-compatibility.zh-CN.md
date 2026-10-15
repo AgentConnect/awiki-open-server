@@ -4,6 +4,18 @@
 
 最后整理日期：2026-10-15。当前对齐基线为 `release/0929`；验收范围与历史证据分别说明如下。
 
+## release/1014：关闭 P5/P6 临时兼容
+
+本分支从 `main` 的 `09d38fd` 创建，按 2026-10-15 用户要求移除测试期间的 P5/P6 空流兼容。
+相关 bootstrap 请求返回 `sync.lanes_not_supported`，`supported=[]`；delta 不接受 `lanes`
+或 `p6_delivery`，不返回兼容空流；P6 delivery-context WebSocket 子协议拒绝，关闭码 4406。
+旧数据库中的协商记录不会启用这些能力，普通同步重新协商会保存空的能力集合。
+普通 Sync v2、Schema 3 Snapshot、明文 Direct 和普通群保留，公开 E2EE 能力继续关闭。
+
+仍强制请求 P5/P6 的 CLI/App 需要在客户端改为只协商普通同步。下面 CLI 1.0.58 和 App
+0.1.38+49 的通过记录属于 `09d38fd` 的临时兼容状态，不能作为当前分支的客户端接入通过
+证据；本分支以拒绝相关能力、普通明文同步及重启回归为验证范围，不运行加密成功流程。
+
 ## release/0929 对齐状态
 
 Open Server 使用锁定的已发布 ANP Python SDK **1.0.6**。`/user-service/v1/handle/rpc` 的
@@ -17,11 +29,9 @@ Guest Gateway 或托管 Skill Agent 能力。CLI 手机注册仍可使用本地 
 当前 aWIKI ME `release/0929` 的原始 Dart `OnboardingServerInfo` parser 已成功解析该响应，
 识别免联系方式验证注册和关闭的 Recovery；这是接口合同验证，不代替真实 App 用户旅程。
 
-2026-10-14 用户授权过渡处理：现有客户端的合法 P5/P6 订阅请求在 bootstrap 中回复成功，
-delta 返回固定空流；WebSocket 接受对应已绑定安装的兼容子协议，只发送明文同步 dirty hint。
-这使普通注册和收信不再被初始化协商阻断；没有实现加密消息生产者、密文存储、prekey、
-KeyPackage 或加密附件业务。公开 ANP E2EE profile/security 能力继续关闭。
-客户端以后只协商普通同步时，不会返回这些兼容空流。
+历史过渡（2026-10-14 授权，release/1014 已移除）：当时 P5/P6 订阅在 bootstrap 回复成功，
+delta 返回固定空流，对应 WebSocket 子协议只发送明文同步 dirty hint。该处理未实现加密
+消息生产者、密文存储、prekey、KeyPackage 或加密附件业务。
 
 正式 CLI **1.0.58**（commit `b7ed6f95f7fb90151726a96e6bed756957f6312e`，Linux x86_64
 SHA-256 `459bf8737cf27c8441fd0f4d22cefdf67958a777ffefd193fef0b08126282c85`）已验证标准
@@ -30,7 +40,7 @@ SHA-256 `459bf8737cf27c8441fd0f4d22cefdf67958a777ffefd193fef0b08126282c85`）已
 扩展后的 `smoke-rust-cli-connect` 已通过：两个身份标准注册、明文 Direct 双向收发、Inbox/History、
 明文 Group create/add/send/read。
 
-2026-10-15 补齐以下验收：
+2026-10-15 在 `09d38fd` 临时兼容状态下补齐以下验收：
 
 - 完整 `smoke-rust-cli-realtime-restart` 通过：2 次服务端启动、3 次 listener 启动、5 条明文
   消息，覆盖在线通知、listener 停机补收、服务端重启及历史读取。每次就绪检查均完成
@@ -71,7 +81,7 @@ CLI 和其依赖源码未修改；这是当前发布组合的接入证据，不�
 
 过渡前 Core 根据编译 feature 请求 P5/P6，并要求服务返回完全相同的 lane 集合，导致上述
 `sync.lanes_not_supported`。这属于 AWiki 私有同步合同，不能据此认定 MessageService/UserService
-违反 ANP。2026-10-14 的用户授权空流兼容取代该初始化拒绝行为，加密业务仍不支持。
+违反 ANP。2026-10-14 曾临时使用空流兼容；release/1014 已恢复明确拒绝。
 
 所有 Rust CLI smoke 使用标准两阶段注册，通过 `--verification-stdin` 传递验证材料，不使用
 `--community`，失败日志也对 stdin 中的联系方式和 operator code 脱敏。失败门禁保持非零退出。
@@ -80,7 +90,7 @@ CLI 和其依赖源码未修改；这是当前发布组合的接入证据，不�
 
 验收客户端是 `https://awiki.info/cli/stable/manifest.json` 的未修改正式 CLI：**1.0.52**，commit `dde0a9c54eebf29a2ec97089e90a1fa77ba768c5`，linux-amd64 SHA-256 `a055da8dad2969739c50cee4f2ee0bf34b45f5354ea74617f103534b239f9d1a`。不要把 candidate16、`--community` 或未发布的 1.0.53 Community 构建当作当前路径。
 
-新身份使用正式 `id register`，需要 Handle 和手机验证材料。Open Server 不发送短信；`send_otp`（purpose `awiki.identity.register.v1`）把一次性本地操作码写到数据目录，再用 `--otp` 完成注册。可靠 listener 需要真实单设备 Manifest/绑定。当时正式 CLI 1.0.52 请求 P5/P6 后被 `sync.lanes_not_supported` 阻断；现行过渡处理见上文，E2EE 业务仍未实现。该设备的普通 Schema 3 Snapshot 恢复已实现。Open 不提供身份/Handle 找回或 Root Transfer。
+新身份使用正式 `id register`，需要 Handle 和手机验证材料。Open Server 不发送短信；`send_otp`（purpose `awiki.identity.register.v1`）把一次性本地操作码写到数据目录，再用 `--otp` 完成注册。可靠 listener 需要真实单设备 Manifest/绑定。当时正式 CLI 1.0.52 请求 P5/P6 后被 `sync.lanes_not_supported` 阻断；release/1014 同样拒绝此类协商，E2EE 业务未实现。该设备的普通 Schema 3 Snapshot 恢复已实现。Open 不提供身份/Handle 找回或 Root Transfer。
 
 R2 未发布 CLI 1.0.53 / SHA `8169383d86a57eaed23e015dc948f8176216e9f81903d16f590dd03c513f847f`（基于 `c61fa4b419b96fdabdbd321f1a8e47cdd7f77302`）只作历史记录。
 
@@ -112,8 +122,8 @@ contract 版本，不是多设备能力声明：Open Server 将一个 DID 固定
 instance；第二设备或第二 client instance 返回 `not_supported`。空账号可以 tail-only
 bootstrap；日志缺口和过期 cursor 走 Schema 3 分页 Snapshot
 （`awiki.message-sync.explicit-negotiation.v1`、`sync.snapshot_paging.v1`），再接普通
-delta。2026-10-14 起，现有客户端所请求的 P5/P6 订阅由过渡适配返回空流，明文继续同步；
-加密业务仍被拒绝。不提供设备间状态共享。
+delta。release/1014 拒绝 P5/P6 协商，客户端必须只请求普通同步；加密业务继续拒绝。
+不提供设备间状态共享。
 
 可重复的分层验证：
 

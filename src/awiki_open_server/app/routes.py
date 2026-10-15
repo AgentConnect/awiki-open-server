@@ -368,9 +368,7 @@ def mount_routes(app: FastAPI) -> None:
 
     async def im_ws(websocket: WebSocket):
         offered_subprotocols = {value.strip() for value in websocket.headers.get("sec-websocket-protocol", "").split(",") if value.strip()}
-        compatibility_protocol = "awiki.sync.event.v3.p6-delivery-context.v1"
-        compatibility = compatibility_protocol in offered_subprotocols
-        v3 = compatibility or "awiki.sync.event.v3" in offered_subprotocols
+        v3 = "awiki.sync.event.v3" in offered_subprotocols
         sync_changed_v2 = v3 or "awiki.sync.changed.v2" in offered_subprotocols
         if offered_subprotocols and not sync_changed_v2:
             await websocket.close(code=4406)
@@ -395,25 +393,11 @@ def mount_routes(app: FastAPI) -> None:
             if account is None:
                 return False
             with get_store(websocket).connect() as conn:
-                binding = conn.execute("SELECT client_instance_id FROM sync_v2_bindings WHERE owner_did=? AND account_id=? AND device_id=?", (did, account.account_id, account.device_id)).fetchone()
-                if binding is None:
-                    return False
-                if not compatibility:
-                    return True
-                instances = websocket.headers.getlist("x-awiki-p6-client-instance-id")
-                if len(instances) != 1 or instances[0] != binding["client_instance_id"]:
-                    return False
-                negotiation = conn.execute(
-                    """SELECT negotiated_json FROM sync_capability_negotiations
-                       WHERE account_id=? AND device_id=? AND auth_generation=? AND client_instance_id=?
-                         AND activation_state='active'""",
-                    (account.account_id, account.device_id, account.auth_generation, binding["client_instance_id"]),
-                ).fetchone()
-                return bool(negotiation and {"lanes.p6_group.v1", "p6.delivery_context.v1"} <= set(json.loads(negotiation["negotiated_json"])))
+                return conn.execute("SELECT 1 FROM sync_v2_bindings WHERE owner_did=? AND account_id=? AND device_id=?", (did, account.account_id, account.device_id)).fetchone() is not None
         if not valid_binding():
-            await websocket.close(code=4406 if compatibility else 4401)
+            await websocket.close(code=4401)
             return
-        await websocket.accept(subprotocol=compatibility_protocol if compatibility else "awiki.sync.event.v3" if v3 else "awiki.sync.changed.v2" if sync_changed_v2 else None)
+        await websocket.accept(subprotocol="awiki.sync.event.v3" if v3 else "awiki.sync.changed.v2" if sync_changed_v2 else None)
         hub = websocket.app.state.realtime_hub
         queue = hub.subscribe(did)
         if sync_changed_v2:

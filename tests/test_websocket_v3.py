@@ -66,25 +66,26 @@ def test_v3_does_not_accept_query_credentials_or_unsupported_p6(tmp_path):
     assert disconnected.value.code == 4406
 
 
-def test_plaintext_client_subscription_ws_requires_bound_installation(tmp_path):
+def test_old_p6_negotiation_cannot_reenable_ws_protocol(tmp_path):
     app, client, did, token = prepare(tmp_path)
     rpc(client, "sync.bootstrap", {
         "meta": {"profile": "anp.sync.local.v2", "security_profile": "transport-protected", "sender_did": did, "operation_id": "ws-compat-bootstrap"},
         "body": {"client_instance_id": "ws-only", "capabilities": {
             "sync_profile": "anp.sync.local.v2", "event_schema_max": 1,
-            "requested_sync_capabilities": ["lanes.p5_device.v1", "lanes.p6_group.v1", "p6.delivery_context.v1"],
+            "requested_sync_capabilities": [],
             "requested_snapshot_capabilities": {"schema_max": 3, "deliveries": ["paged_v1"]},
-            "p6_delivery": "p6.delivery_context.v1",
         }},
     }, token)
+    previous = json.dumps(["lanes.p5_device.v1", "lanes.p6_group.v1", "p6.delivery_context.v1"])
+    with app.state.store.connect() as conn:
+        conn.execute("UPDATE sync_capability_negotiations SET requested_json=?, negotiated_json=?", (previous, previous))
+    client = TestClient(create_app(app.state.settings))
     protocol = "awiki.sync.event.v3.p6-delivery-context.v1"
     headers = {"Authorization": f"Bearer {token}", "X-AWiki-P6-Client-Instance-ID": "ws-only"}
-    with client.websocket_connect("/im/ws", headers=headers, subprotocols=[protocol]) as ws:
-        assert ws.accepted_subprotocol == protocol
+    with pytest.raises(WebSocketDisconnect) as disconnected:
+        with client.websocket_connect("/im/ws", headers=dict(headers), subprotocols=[protocol]):
+            pytest.fail("old negotiation reenabled unsupported P6 protocol")
+    assert disconnected.value.code == 4406
+    with client.websocket_connect("/im/ws", headers=dict(headers), subprotocols=[protocol, "awiki.sync.event.v3"]) as ws:
+        assert ws.accepted_subprotocol == "awiki.sync.event.v3"
         assert ws.receive_json()["method"] == "sync.changed"
-        app.state.realtime_hub.publish(did, {"method": "direct.message.created", "sync": {"event_seq": "2"}})
-        assert ws.receive_json()["sync"]["account_scan_seq_hint"] == "2"
-    headers["X-AWiki-P6-Client-Instance-ID"] = "other-installation"
-    with pytest.raises(WebSocketDisconnect):
-        with client.websocket_connect("/im/ws", headers=headers, subprotocols=[protocol]):
-            pytest.fail("unbound client instance accepted")

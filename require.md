@@ -77,9 +77,10 @@ Community v1 不是商业集群的缩小部署包。基础群能力和标准跨�
 `awiki.message-sync.explicit-negotiation.v1`、`sync.snapshot_paging.v1`、extended bootstrap、
 ordinary delta/hydration，以及 Schema 3 分页 Snapshot。空账号可以 tail-only；日志缺口或
 cursor 失效必须走 Snapshot 恢复，不能永远 tail-only。只服务一个 DID 的唯一设备/安装；第二
-设备或第二 client instance 返回 `not_supported`。2026-10-14 用户授权过渡适配：合法现有客户端
-订阅在 bootstrap 回复成功，delta 返回固定空流，让 ordinary 同步继续。该处理不实现加密
-消息生产者，prekey/KeyPackage、密文发送和加密附件业务仍拒绝，公开 E2EE 能力保持关闭。
+设备或第二 client instance 返回 `not_supported`。release/1014 按 2026-10-15 用户要求移除
+P5/P6 临时空流兼容：相关 bootstrap 请求返回 `sync.lanes_not_supported`，delta 不接受
+`lanes`/`p6_delivery`，P6 delivery-context WebSocket 子协议不接受。已有协商记录不能重新启用。
+普通同步及 Schema 3 Snapshot 保留；prekey/KeyPackage、密文发送和加密附件业务仍拒绝。
 
 ## 5. Community Group v1
 
@@ -267,8 +268,8 @@ DID discovery 必须限制 scheme、host、port、重定向和地址类别，防
 
 本地 `/im/rpc` 声明 `awiki.message-sync.explicit-negotiation.v1` 与 `sync.snapshot_paging.v1`，
 并实现对应 ordinary 同步与 Schema 3 Snapshot。公开 peer 入口不声明本域同步模式。加密业务
-未实现并在请求时明确拒绝；P5/P6 订阅仅有上述过渡空流。普通 WS 可协商 `awiki.sync.event.v3`
-或同安装已协商的兼容子协议，发送 schema 2 dirty hint；
+未实现并在请求时明确拒绝；P5/P6 订阅不支持。普通 WS 可协商 `awiki.sync.event.v3`
+或 `awiki.sync.changed.v2`，发送 schema 2 dirty hint；
 每次连接和连接存续期间都验证当前设备 token 与安装绑定。
 
 ## 10. 测试门禁

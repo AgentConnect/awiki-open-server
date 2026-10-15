@@ -4,6 +4,21 @@
 
 Last reviewed: 2026-10-15. The alignment baseline is `release/0929`; current acceptance scope and historical evidence are distinguished below.
 
+## release/1014: remove temporary P5/P6 compatibility
+
+This branch starts from `main` commit `09d38fd`. At the user's request on 2026-10-15,
+P5/P6 empty-stream compatibility is removed. Related bootstrap requests return
+`sync.lanes_not_supported` with `supported=[]`. Delta rejects `lanes`/`p6_delivery` and
+returns no compatibility streams. The P6 delivery-context WebSocket subprotocol is rejected
+with close code 4406. Stored negotiations cannot reenable it; ordinary renegotiation saves
+an empty capability set. Ordinary Sync v2, Schema 3 Snapshot, plaintext Direct, and ordinary
+Groups remain available; public E2EE capabilities stay disabled.
+
+CLI/App versions that require P5/P6 must change their requests to ordinary sync only.
+The CLI 1.0.58 and App 0.1.38+49 passes below apply to temporary compatibility at `09d38fd`,
+not current-branch client acceptance. Verification here covers disabled capabilities,
+ordinary plaintext sync, and restart regressions, without successful encryption flows.
+
 ## release/0929 alignment status
 
 Open Server pins published ANP Python SDK **1.0.6**. Handle `registration_check` on
@@ -20,12 +35,10 @@ The unmodified `release/0929` App Dart `OnboardingServerInfo` parser accepted th
 recognizing registration without contact verification and disabled Recovery. This contract
 check does not replace a real App journey.
 
-On 2026-10-14 the user authorized transitional initialization acknowledgement: valid existing-client
-P5/P6 subscriptions succeed at bootstrap and remain permanently empty during delta. The matching
-WebSocket subprotocol requires the bound installation and emits only plaintext sync hints. No
-encrypted producer, ciphertext storage, PreKey, KeyPackage, or encrypted attachment operation is
-enabled. Public ANP E2EE profiles/security remain disabled. Clients requesting ordinary sync only
-receive no compatibility streams.
+Historical transition (authorized 2026-10-14, removed on release/1014): P5/P6 subscriptions
+were acknowledged at bootstrap and returned empty streams during delta. The matching
+WebSocket subprotocol emitted plaintext sync hints only. This never implemented encrypted
+producers, ciphertext storage, PreKey, KeyPackage, or encrypted attachment operations.
 
 Official CLI **1.0.58**, commit `b7ed6f95f7fb90151726a96e6bed756957f6312e`, Linux x86_64
 SHA-256 `459bf8737cf27c8441fd0f4d22cefdf67958a777ffefd193fef0b08126282c85`, passed standard
@@ -35,7 +48,7 @@ unmodified. CLI 1.0.57 is now below the default tenant's minimum version 1.0.58.
 The expanded `smoke-rust-cli-connect` passed standard registration, bidirectional plaintext Direct,
 Inbox/History, and plaintext Group create/add/send/read.
 
-The remaining focused gates were completed on 2026-10-15:
+The remaining focused gates passed on 2026-10-15 with temporary compatibility at `09d38fd`:
 
 - The complete `smoke-rust-cli-realtime-restart` passed: two server boots, three listener boots,
   and five plaintext messages cover live notifications, listener downtime recovery, server
@@ -84,8 +97,7 @@ The test server was stopped.
 Before this transition, Core requested P5/P6 from compiled features and required the same lane
 set, resulting in the recorded `sync.lanes_not_supported` failure. This is an AWiki private sync
 contract mismatch, not evidence of an ANP violation by MessageService or UserService. The user's
-2026-10-14 empty-stream transition replaces initialization rejection; encrypted operations remain
-unsupported.
+2026-10-14 empty-stream transition was temporary; release/1014 restores explicit rejection.
 
 Rust CLI smoke gates now use standard two-step registration with `--verification-stdin`,
 never `--community`. Failure diagnostics redact stdin verification material and gates retain
@@ -95,7 +107,7 @@ nonzero exits on failure.
 
 Acceptance uses the official unmodified CLI from `https://awiki.info/cli/stable/manifest.json`: version **1.0.52**, commit `dde0a9c54eebf29a2ec97089e90a1fa77ba768c5`, linux-amd64 SHA-256 `a055da8dad2969739c50cee4f2ee0bf34b45f5354ea74617f103534b239f9d1a`. Do not use candidate16, `--community`, or an unreleased 1.0.53 Community build as the current path.
 
-New identities use official `id register` with a handle plus phone verification material. Open Server does not send SMS; `send_otp` with purpose `awiki.identity.register.v1` stores a one-time local operator code under the data directory. Pass that code as `--otp`. The reliable listener requires an actual single-device Manifest/binding. At that time CLI 1.0.52 was blocked by `sync.lanes_not_supported`; the current transition is described above and E2EE remains unsupported. Ordinary Schema 3 Snapshot recovery is implemented for the single device. Open does not provide identity/Handle recovery or Root Transfer.
+New identities use official `id register` with a handle plus phone verification material. Open Server does not send SMS; `send_otp` with purpose `awiki.identity.register.v1` stores a one-time local operator code under the data directory. Pass that code as `--otp`. The reliable listener requires an actual single-device Manifest/binding. At that time CLI 1.0.52 was blocked by `sync.lanes_not_supported`; release/1014 also rejects these requests, and E2EE remains unsupported. Ordinary Schema 3 Snapshot recovery is implemented for the single device. Open does not provide identity/Handle recovery or Root Transfer.
 
 R2 unpublished CLI 1.0.53 / SHA `8169383d86a57eaed23e015dc948f8176216e9f81903d16f590dd03c513f847f` over `c61fa4b419b96fdabdbd321f1a8e47cdd7f77302` is historical only.
 
@@ -112,7 +124,7 @@ R2 unpublished CLI 1.0.53 / SHA `8169383d86a57eaed23e015dc948f8176216e9f81903d16
 
 Repository and public gates cover DID registration; Direct send, Inbox, and History; Group create/get/list/add/join/members/update/send/messages/leave/remove in both host directions; People follow/status/following/followers; Site root/pages; and attachments as implemented.
 
-Those are gate targets, not a claim that every future client passes automatically. A clean `awiki-cli` 1.0.43 build at commit `bbeb8a5c` was verified on 2026-08-08. The real-CLI gates cover binary Direct/Group Attachment download with byte comparison, members and cursor pagination, idempotent mark-read and restart persistence, foreground Realtime with `awiki.sync.changed.v2`, listener/server restart recovery, and two independent TLS domains with bidirectional plaintext Direct and a Community Group hosted in each direction. The v2 sync profile is a wire-version contract, not a multi-device claim: Open Server binds one DID to exactly one device and one client instance and rejects additional devices/instances. Empty accounts may use tail-only bootstrap; log gaps and expired cursors recover through Schema 3 paged Snapshot (`awiki.message-sync.explicit-negotiation.v1`, `sync.snapshot_paging.v1`), then ordinary delta. Since 2026-10-14, existing-client P5/P6 subscriptions receive transitional empty streams so plaintext sync proceeds; encrypted operations remain rejected. Cross-device state sharing is not provided.
+Those are gate targets, not a claim that every future client passes automatically. A clean `awiki-cli` 1.0.43 build at commit `bbeb8a5c` was verified on 2026-08-08. The real-CLI gates cover binary Direct/Group Attachment download with byte comparison, members and cursor pagination, idempotent mark-read and restart persistence, foreground Realtime with `awiki.sync.changed.v2`, listener/server restart recovery, and two independent TLS domains with bidirectional plaintext Direct and a Community Group hosted in each direction. The v2 sync profile is a wire-version contract, not a multi-device claim: Open Server binds one DID to exactly one device and one client instance and rejects additional devices/instances. Empty accounts may use tail-only bootstrap; log gaps and expired cursors recover through Schema 3 paged Snapshot (`awiki.message-sync.explicit-negotiation.v1`, `sync.snapshot_paging.v1`), then ordinary delta. Release/1014 rejects P5/P6 negotiation; clients must request ordinary sync only. Encrypted operations remain rejected. Cross-device state sharing is not provided.
 
 Run the gates separately:
 

@@ -42,13 +42,13 @@ Use `pytest` and `pytest-asyncio`. Name files `test_*.py` and test functions `te
 
 `awiki-open-server` does not support end-to-end encryption. Do not add or run successful Direct E2EE, Group E2EE, secure-message, prekey, ratchet, or encrypted-attachment flows as Open Server acceptance or release gates. Tests may verify that E2EE capabilities are disabled and that related requests return `not_supported` or `sync.lanes_not_supported`. Do not advertise P5/P6, Snapshot, or negotiation capabilities that the handlers do not implement. Cross-domain interoperability verification for this repository must use plaintext Direct and plaintext Community Group flows. E2EE tests belonging to Message Service, ANP SDK, or client repositories are outside the Open Server test scope and must be retained and run when those products are the explicit test target. Acceptance uses the official unmodified CLI; do not require `--community` or a Community-specific client.
 
-User-authorized transition (2026-10-14): acknowledge valid current-client P5/P6
-subscription requests during local sync bootstrap, and return permanently empty
-compatibility streams during delta so plaintext receiving can proceed. This
-initialization acknowledgement does not enable encrypted producers, key publication,
-ciphertext sending/storage, or encrypted attachments; their requests remain rejected.
-Keep public ANP E2EE profiles/security capabilities disabled. Verify registration and
-plaintext receiving only; do not run E2EE flows. The user will change the client later.
+User decision for release/1014 (2026-10-15): remove the temporary P5/P6 empty-stream
+compatibility authorized on 2026-10-14. Reject P5/P6 bootstrap requests with
+`sync.lanes_not_supported`; do not return compatibility streams or accept the P6
+delivery-context WebSocket subprotocol, including for previously negotiated installs.
+Keep ordinary sync v2 and Schema 3 Snapshot recovery. Clients must request ordinary
+sync only. Keep public ANP E2EE capabilities disabled and encrypted operations rejected;
+do not run successful E2EE flows to make acceptance pass.
 
 ## Commit & Pull Request Guidelines
 

@@ -132,7 +132,7 @@ awiki-cli tenant setup community \
 awiki-cli init
 ```
 
-`localhost` is not a valid DID host for current CLI/WNS validation; `127.0.0.1.nip.io` is for loopback testing only. The repository provides real-CLI gates for the connection/write path, complete local Attachment/members/mark-read/restart journey, foreground Realtime/Sync v2, and two-domain plaintext Direct/Community Group interoperability. Open Server supports the CLI's `anp.sync.local.v2` wire contract in single-DID/single-device pull mode, including Schema 3 paged Snapshot for ordinary recovery. It does not support device sharing, multiple devices for one DID, or E2EE. The user-authorized transition acknowledges existing-client P5/P6 subscriptions as empty streams; encrypted operations remain rejected. See [Client Compatibility](docs/client-compatibility.md). Do not connect with `--secure required`.
+`localhost` is not a valid DID host for current CLI/WNS validation; `127.0.0.1.nip.io` is for loopback testing only. The repository provides real-CLI gates for the connection/write path, complete local Attachment/members/mark-read/restart journey, foreground Realtime/Sync v2, and two-domain plaintext Direct/Community Group interoperability. Open Server supports the CLI's `anp.sync.local.v2` wire contract in single-DID/single-device pull mode, including Schema 3 paged Snapshot for ordinary recovery. It does not support device sharing, multiple devices for one DID, or E2EE. On release/1014, the temporary P5/P6 empty-stream compatibility is removed: such bootstrap requests return `sync.lanes_not_supported`, and clients must request ordinary sync only. See [Client Compatibility](docs/client-compatibility.md). Do not connect with `--secure required`.
 
 ### AWiki Me
 
