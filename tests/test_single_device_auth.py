@@ -364,3 +364,32 @@ async def test_published_group_document_cannot_register_as_a_user(tmp_path):
         response = await call(client, "register", {"handle": "namespace-attack", "did_document": document})
         assert response.json()["error"]["message"] == "did_namespace_reserved"
         assert account_state(app) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revocation", ["user", "document", "generation"])
+async def test_renewal_keeps_inflight_device_token_but_revocation_rejects_both(tmp_path, revocation):
+    app, _ = setup_app(tmp_path)
+    root, device_key, document = document_keys()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+        registration, document = await register_device(client, root, document)
+        old = registration["access_token"]
+        before = account_state(app)
+        renewed = await signed_me(client, document, device_key, f"{document['id']}#device-primary-sign")
+        new = renewed.json()["result"]["access_token"]
+        assert old != new
+        assert account_state(app) == before
+        for token in (old, new):
+            assert (await call(client, "get_me", token=token)).status_code == 200
+            result = await client.post("/im/rpc", json={"jsonrpc": "2.0", "id": "cap", "method": "anp.get_capabilities", "params": {}}, headers={"Authorization": f"Bearer {token}"})
+            assert result.status_code == 200
+            assert "result" in result.json()
+        with app.state.store.connect() as conn:
+            if revocation == "user":
+                conn.execute("UPDATE users SET revoked_at = '2026-01-01T00:00:00Z' WHERE did = ?", (document["id"],))
+            elif revocation == "document":
+                conn.execute("UPDATE did_documents SET status = 'revoked' WHERE did = ?", (document["id"],))
+            else:
+                conn.execute("UPDATE single_device_accounts SET auth_generation = auth_generation + 1 WHERE owner_did = ?", (document["id"],))
+        for token in (old, new):
+            assert (await call(client, "get_me", token=token)).status_code == 401

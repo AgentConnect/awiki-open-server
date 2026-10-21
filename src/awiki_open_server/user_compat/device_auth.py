@@ -156,6 +156,20 @@ def issue_device_token(account: DeviceAccount, key: Ed25519PrivateKey, ttl_secon
     return f"{signed}.{_b64(key.sign(signed.encode()))}"
 
 
+def verified_device_token_subject(token: str, key: Ed25519PrivateKey) -> str:
+    try:
+        header, payload, signature = token.split(".")
+        if json.loads(_decode(header), object_pairs_hook=_unique_members) != {"alg": "EdDSA", "typ": "JWT"}:
+            raise ValueError("wrong token algorithm")
+        key.public_key().verify(_decode(signature), f"{header}.{payload}".encode())
+        claims = json.loads(_decode(payload), object_pairs_hook=_unique_members)
+        if not isinstance(claims, dict) or not isinstance(claims.get("did"), str) or not claims["did"]:
+            raise ValueError("missing token subject")
+        return claims["did"]
+    except (ValueError, TypeError, UnicodeError, InvalidSignature) as exc:
+        raise Unauthorized("device_authorization_invalid") from exc
+
+
 def validate_device_token(token: str, account: DeviceAccount, key: Ed25519PrivateKey) -> None:
     try:
         header, payload, signature = token.split(".")

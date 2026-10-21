@@ -199,3 +199,15 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md). Behavior changes should include pytest,
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
+
+### 任务专用跨后端测试清理
+
+`scripts/cleanup_system_test_scope.py` 是离线、默认关闭的测试 operator，不增加 HTTP/RPC 接口。
+只接受 `cleanup_test_scope_preflight` 或最多 16 个精确 `account_ids` 的 `cleanup_test_scope`。
+私有 `0600` JSON 配置固定 `enabled: true`、`service_url: https://openserver-adapt.anpclaw.com`、
+`handle_prefix: adaptcross` 和当前任务实例的绝对 `data_dir`，由 System Test 的 reviewed SSH profile 绑定。
+清理前必须证明全部 account 属于 `adaptcross` + 10 位十六进制随机后缀的本域 fixture；
+清理其明文消息、创建的群、群密钥和同步投影，保留身份/账号，与通用远端测试保留策略一致。
+附件、Agent 或加入其他本地 Host 群的状态超出本用例范围，整批拒绝；不扩大为通用数据删除工具。
+回执只含计数、scope fingerprint 和零残留断言，不输出身份、消息或凭证。
+跨后端用例在注册前对两个后端做无 selector 的 preflight，缺少 operator 时不得先创建账号。

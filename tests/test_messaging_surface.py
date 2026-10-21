@@ -145,3 +145,18 @@ async def test_direct_group_participant_and_public_surface(client):
         )
         assert response.status_code == 401
         assert response.json()["error"]["message"] == "missing_origin_proof"
+
+
+@pytest.mark.asyncio
+async def test_local_capabilities_do_not_escape_to_public_discovery(client):
+    _, token = await register(client, "capability-local")
+    local = (await rpc(client, "/im/rpc", "anp.get_capabilities", token=token))["result"]["awiki_local"]
+    assert local["capabilities_version"] == 1
+    for name in ("sync", "snapshot", "direct", "groups", "attachments"):
+        assert local["capabilities"][name]["enabled"] is True
+    for name in ("p5_device", "p6_group", "direct_e2ee", "group_e2ee", "encrypted_attachments"):
+        assert local["capabilities"][name] == {"enabled": False, "protocol_version": 1, "reason_code": "not_supported"}
+    public = (await rpc(client, "/anp-im/rpc", "anp.get_capabilities", {"meta": {"profile": "anp.core.binding.v1", "security_profile": "transport-protected", "operation_id": "capability-discovery"}, "body": {}}))["result"]
+    assert "awiki_local" not in public
+    unauthenticated = await rpc(client, "/im/rpc", "anp.get_capabilities")
+    assert "awiki_local" not in unauthenticated["result"]
