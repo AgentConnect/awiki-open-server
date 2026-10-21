@@ -40,7 +40,7 @@ from awiki_open_server.shared.ids import new_id, now_iso
 from awiki_open_server.shared import runtime
 from awiki_open_server.storage.db import Store
 from awiki_open_server.user_compat.device_auth import (
-    bind_device_account, consume_auth_nonce, device_account, issue_device_token, validate_device_token,
+    bind_device_account, consume_auth_nonce, device_account, issue_device_token, validate_device_token, verified_device_token_subject,
 )
 from awiki_open_server.user_compat.registration import registration_check
 
@@ -173,6 +173,32 @@ def _is_active_did(request: Request, did: str) -> bool:
 
 
 def did_for_token(request: Request, token: str) -> str | None:
+    # Device JWTs remain valid for their own lifetime across ordinary renewal.
+    # Resolve only a cryptographically verified subject, then enforce current
+    # server-side revocation, document and device binding on every request.
+    if token.count(".") == 2 and not token.startswith("did:"):
+        try:
+            key = request.app.state.auth_token_signing_key
+            did = verified_device_token_subject(token, key)
+            with get_store(request).connect() as conn:
+                row = conn.execute(
+                    """SELECT d.document_json FROM users u
+                       JOIN did_documents d ON d.did = u.did
+                       WHERE u.did = ? AND u.revoked_at IS NULL
+                         AND d.status = 'active' AND d.revoked_at IS NULL""",
+                    (did,),
+                ).fetchone()
+                if row is None:
+                    return None
+                manifest = _validate_single_device_manifest(_load(row["document_json"]))
+                if manifest is None:
+                    return None
+                account = bind_device_account(conn, device_account(did, manifest))
+                validate_device_token(token, account, key)
+                request.state.device_account = account
+                return did
+        except (InvalidParams, NotSupported, Unauthorized, ValueError):
+            return None
     with get_store(request).connect() as conn:
         row = conn.execute(
             """
@@ -867,6 +893,7 @@ def public_profile(params: dict[str, Any], request: Request) -> dict[str, Any]:
     profile_uri = profile.get("profile_uri")
     return {
         **profile,
+        "full_handle": _split_handle(str(profile["handle"]), settings.did_domain)[3],
         "user_id": profile["did"],
         "user_name": display_name,
         "nick_name": display_name,
@@ -987,7 +1014,7 @@ def _profile_from_did(request: Request, did: str) -> dict[str, Any]:
 
 def _users_profile_view(profile: dict[str, Any], request: Request) -> dict[str, Any]:
     settings = get_settings(request)
-    local, domain, _, _ = _split_handle(str(profile["handle"]), settings.did_domain)
+    local, domain, _, full = _split_handle(str(profile["handle"]), settings.did_domain)
     display_name = profile.get("display_name") or local
     description = profile.get("description")
     profile_uri = profile.get("profile_uri") or f"{settings.public_base_url.rstrip('/')}/profiles/{profile['did']}"
@@ -1008,6 +1035,7 @@ def _users_profile_view(profile: dict[str, Any], request: Request) -> dict[str, 
         "created_at": user_row["created_at"] if user_row else "",
         "handle": local,
         "handle_domain": domain,
+        "full_handle": full,
     }
 
 
@@ -1205,7 +1233,7 @@ def handle_lookup(params: dict[str, Any], request: Request) -> dict[str, Any]:
         "domain": domain,
         "full_handle": full,
         "status": "active",
-        "profile": profile,
+        "profile": {**profile, "full_handle": full},
     }
 
 

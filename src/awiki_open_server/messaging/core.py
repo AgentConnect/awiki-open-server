@@ -103,7 +103,7 @@ def _http_post_json(url: str, payload: dict[str, Any], headers: dict[str, str] |
     return runtime._http_post_json(url, payload, headers=headers, body_bytes=body_bytes, **options)
 
 
-def capabilities(_: dict[str, Any], request: Request) -> dict[str, Any]:
+def capabilities(params: dict[str, Any], request: Request) -> dict[str, Any]:
     settings = get_settings(request)
     public_rpc = request.url.path.rstrip("/") == settings.anp_public_rpc_path.rstrip("/")
     profiles = list(STANDARD_PROFILES if public_rpc else (*STANDARD_PROFILES, *LOCAL_PROFILES))
@@ -197,6 +197,22 @@ def capabilities(_: dict[str, Any], request: Request) -> dict[str, Any]:
         },
     }
 
+    version = params.get("capabilities_version")
+    if not public_rpc and "capabilities_version" in params and (type(version) is not int or version != 1):
+        raise InvalidParams("unsupported_capabilities_version")
+    if not public_rpc and version == 1 and current_did(request, required=False) is not None:
+        enabled = {"direct", "groups", "attachments", "history", "read_state", "sync",
+                   "snapshot", "group_open_join", "group_admin_add"}
+        disabled = {"p5_device", "p6_group", "direct_e2ee", "group_e2ee",
+                    "encrypted_attachments", "group_invite", "group_approval"}
+        local = {name: {"enabled": True, "protocol_version": 1} for name in sorted(enabled)}
+        local.update({name: {"enabled": False, "protocol_version": 1,
+                             "reason_code": "not_supported"} for name in sorted(disabled)})
+        local["attachments"]["limits"] = {"max_object_bytes": str(settings.max_attachment_bytes)}
+        local["groups"]["limits"] = {"max_members": 100, "max_joined_groups": 20}
+        local["sync"]["limits"] = {"max_devices": 1, "max_client_instances": 1}
+        local["snapshot"]["limits"] = {"schema": 3, "delivery": "paged_v1"}
+        result["awiki_local"] = {"capabilities_version": 1, "capabilities": local}
     if not public_rpc:
         result["features"]["ordinary_sync"] = {
             "profile": "anp.sync.local.v2",

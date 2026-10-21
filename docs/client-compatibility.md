@@ -14,6 +14,12 @@ with close code 4406. Stored negotiations cannot reenable it; ordinary renegotia
 an empty capability set. Ordinary Sync v2, Schema 3 Snapshot, plaintext Direct, and ordinary
 Groups remain available; public E2EE capabilities stay disabled.
 
+Profile compatibility responses (`get_public_profile`/`get_me`, the embedded local
+Handle lookup profile, and users profile views) also expose a canonical `full_handle`
+matching the authoritative binding. Existing `handle` spellings remain unchanged,
+as do stored identities and conversations. New clients prefer `full_handle` so the
+legacy `name@domain` display form does not conflict with the `name.domain` binding.
+
 CLI/App versions that require P5/P6 must change their requests to ordinary sync only.
 The CLI 1.0.58 and App 0.1.38+49 passes below apply to temporary compatibility at `09d38fd`,
 not current-branch client acceptance. Verification here covers disabled capabilities,
@@ -177,7 +183,11 @@ Verify registration/login; Direct send/receive/history; unread/read; Group creat
 
 ### Agent/Daemon limitation
 
-AWiki Me enables Agent/Daemon APIs only for `awiki.ai`, `awiki.info`, and `anpclaw.com`. A normal self-hosted domain may support login and messages while the Agent page remains unsupported. Open Server compatibility routes do not bypass the app realm policy.
+Capability-aware AWiki Me uses the versioned Server Info contract for Agent and
+Daemon availability. Open Server declares both complete products unsupported;
+partial compatibility routes do not enable them. Older App releases may still
+use a tenant-domain allowlist and require a client upgrade to consume this
+contract. The server declaration does not depend on its domain or client platform.
 
 ### E2EE
 
@@ -220,3 +230,27 @@ Limitations/failures:
 ```
 
 Custom tenants do not automatically discover another tenant’s legacy credentials. Explicitly import with `awiki-cli --migration id import-v1 --name <name> --credentials-dir <legacy-credentials-directory>`. The source override applies only to this import; it does not change tenant configuration or enable the reliable listener.
+
+## 后端能力发现（合同 v1）
+
+`GET /user-service/v1/server-info?capabilities_version=1` 保留外层
+`schema_version: 1`，回显 `capabilities_version: 1`。未携带版本时保留旧手机号免验证
+发现形状；新版使用 `handle_only`，不要求无业务用途的手机号或邮箱。未知合同版本返回
+422。`client_platform` 不改变服务器事实，发现没有注册、写入身份或发送验证码的副作用。
+
+身份声明明确关闭多设备、设备撤销、能力升级、管理权转移；找回 methods 为空。
+账户同步、完整 Agent/Daemon/Skill 产品、邮件、Model Proxy、Guest 和托管关闭。
+基础内容和站点仍开放，内容数量限制为 5；不将部分 Agent 兼容路由声明成完整产品。
+更新政策明确不提供，客户端不得据此改用官方租户的更新源或清除已缓存最低版本。
+
+已认证 `/im/rpc` 的 `anp.get_capabilities` 仅在 `body.capabilities_version=1` 时增加 `awiki_local`：普通私聊、群聊、附件、
+历史、已读、普通 Sync v2、Schema 3 Snapshot、开放加入和管理员添加可用。
+P5/P6、所有加密、邀请及审批关闭；附件大小来自运行配置，群成员/加入数量为既有实际限制。
+匿名兼容发现及公共 `/anp-im/rpc` 不返回此本域扩展；公共 ANP 发现及认证边界不变。
+客户端须请求空扩展通道集合，不能退回隐式 bootstrap 或把加密请求改为明文。
+
+公开字段合同由 AWiki IM Core API 文档维护；本仓运行、安装和测试不依赖该仓。
+本地验证：`uv run pytest tests/test_registration_discovery.py tests/test_messaging_surface.py tests/test_standard_sync_asgi.py -q`。
+
+
+扩展能力发现使用显式 `body.capabilities_version=1`（兼容入口允许同名扁平字段），未请求时保留旧响应形状。未知/null/字符串/布尔版本返回 InvalidParams。此选择只影响本域 AWiki 能力投影；公共 ANP 发现、普通 Sync 和既有认证边界不变。官方新 Core 的后端能力请求使用此版本，旧客户端继续默认发现。

@@ -12,6 +12,11 @@
 旧数据库中的协商记录不会启用这些能力，普通同步重新协商会保存空的能力集合。
 普通 Sync v2、Schema 3 Snapshot、明文 Direct 和普通群保留，公开 E2EE 能力继续关闭。
 
+资料兼容响应（`get_public_profile`/`get_me`、本域 Handle lookup 的嵌入资料和 users
+资料视图）同时提供规范化 `full_handle`，与 Handle 权威绑定一致。旧 `handle` 字段的
+原有格式保留；不改数据库、身份或会话。新客户端优先使用 `full_handle`，避免把旧
+`name@domain` 显示格式与 `name.domain` 的绑定误判为冲突。
+
 仍强制请求 P5/P6 的 CLI/App 需要在客户端改为只协商普通同步。下面 CLI 1.0.58 和 App
 0.1.38+49 的通过记录属于 `09d38fd` 的临时兼容状态，不能作为当前分支的客户端接入通过
 证据；本分支以拒绝相关能力、普通明文同步及重启回归为验证范围，不运行加密成功流程。
@@ -271,3 +276,6 @@ ANP SDK version：
 ```
 
 自定义租户不会自动发现其他租户的旧凭据。显式导入旧身份时使用 `awiki-cli --migration id import-v1 --name <name> --credentials-dir <旧凭据目录>`；此参数仅指定本次导入来源，不更改租户配置，也不启动可靠 listener。
+
+
+扩展能力发现使用显式 `body.capabilities_version=1`（兼容入口允许同名扁平字段），未请求时保留旧响应形状。未知/null/字符串/布尔版本返回 InvalidParams。此选择只影响本域 AWiki 能力投影；公共 ANP 发现、普通 Sync 和既有认证边界不变。官方新 Core 的后端能力请求使用此版本，旧客户端继续默认发现。

@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Any
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from awiki_open_server.protocol.anp_adapter import valid_handle_local_part
@@ -94,7 +94,10 @@ def server_info(request: Request) -> dict[str, Any]:
     settings = request.app.state.settings
     registration_domain = request.query_params.get("registration_domain", settings.did_domain).strip().lower().rstrip(".")
     local = registration_domain == settings.did_domain.lower()
-    return {
+    version = request.query_params.get("capabilities_version")
+    if version is not None and version != "1":
+        raise HTTPException(422, detail={"code": "capabilities_version_unsupported"})
+    result = {
         "schema_version": 1,
         "service": {"kind": "awiki-open-server", "name": "AWiki Open Server"},
         "services": {
@@ -116,3 +119,28 @@ def server_info(request: Request) -> dict[str, Any]:
         },
         "deployment": {"did_domain": settings.did_domain},
     }
+
+    if version == "1":
+        result["capabilities_version"] = 1
+        registration = result["identity"]["handle_registration"]
+        registration["default_method"] = "handle_only" if local else None
+        registration["methods"] = [{"id": "handle_only", "enabled": True,
+                                    "verification": {"required": False, "type": "none"}}] if local else []
+        def capability(enabled: bool, **limits):
+            value = {"enabled": enabled, "protocol_version": 1}
+            if not enabled:
+                value["reason_code"] = "not_supported"
+            if limits:
+                value["limits"] = limits
+            return value
+        for name in ("multi_device", "device_revoke", "capability_upgrade", "root_transfer"):
+            result["identity"][name] = capability(False)
+        result["identity"]["multi_device"]["limits"] = {"max_devices": 1}
+        result["account"] = {"state_sync": capability(False)}
+        result["agents"].update({name: capability(False) for name in ("managed_agents", "daemon")})
+        for name in ("model_proxy", "guest_gateway", "mail"):
+            result["services"][name] = {**capability(False), "base_url": None}
+        result["content"] = {"pages": capability(True, max_pages=5),
+                             "sites": capability(True), "hosting": capability(False)}
+        result["client_updates"] = {"policy": capability(False)}
+    return result

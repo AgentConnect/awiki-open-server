@@ -81,9 +81,18 @@ async def test_user_compat_did_auth_profile_and_handle_shape(client):
     assert handle["result"]["did"] == did
     assert handle["result"]["full_handle"] == "compat-alice.testserver"
 
+    # Directory bindings and display profiles must describe the same Handle.
+    # Keep the legacy storage spelling while exposing the canonical full form.
+    assert handle["result"]["profile"]["handle"] == "compat-alice@testserver"
+    assert handle["result"]["profile"]["full_handle"] == "compat-alice.testserver"
+    public = await rpc(client, "/user-service/did/profile/rpc", "get_public_profile", {"did": did})
+    assert public["result"]["handle"] == "compat-alice@testserver"
+    assert public["result"]["full_handle"] == handle["result"]["full_handle"]
+
     user = await rpc(client, "/user-service/users/rpc", "get_by_did", {"did": did})
     assert user["result"]["did"] == did
     assert user["result"]["handle"] == "compat-alice"
+    assert user["result"]["full_handle"] == "compat-alice.testserver"
 
 
 @pytest.mark.asyncio

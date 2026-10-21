@@ -24,7 +24,7 @@ adapter 先验证原始 Manifest 的依赖和引用，再为 SDK 的密钥角色
 - 唯一设备采用 ready-admin scopes：`device:manage`、`device:read`、`message:connect`。scope 不是能力声明，范围外设备管理方法仍不支持；
 - `iat/nbf/exp/jti`，其中 `nbf=iat`，jti 每次签发唯一。
 
-服务端仍首先核对数据库中的当前 token 和有效期，再校验签名、claims 及当前文档/持久绑定；不会因为 token 外观像 JWT 就接受。旧 `alg=none` 设备 token 不继续作为有效设备凭据。token、签名 proof 和私钥不进入日志。
+设备 Access Token 先验证服务端签名，再以已验证的 DID 查找未撤销的用户、文档和持久设备绑定，并严格校验 claims、有效期及授权代次。同一设备普通续期不撤销尚未过期的旧 Access Token，保证并发业务请求连续；过期、用户/文档撤销、设备或授权代次不匹配仍拒绝。数据库最新 token 只用于既有非设备凭据路径，不能成为设备 JWT 的额外失效条件。旧 `alg=none` 设备 token 不继续作为有效设备凭据。token、签名 proof 和私钥不进入日志。
 
 已配置 Service Ed25519 key 时复用该受保护材料；未配置时，在 `AWIKI_DATA_DIR/auth-token-key.pem` 原子创建权限 0600 的本地签名键，重启复用。禁止以符号链接或公开权限文件替代。备份/恢复必须包含实际使用的 token 签名材料；切换签名键会使旧 token 失效，客户端需签名续期。
 
