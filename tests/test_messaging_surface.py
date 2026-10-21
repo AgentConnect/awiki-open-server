@@ -150,7 +150,14 @@ async def test_direct_group_participant_and_public_surface(client):
 @pytest.mark.asyncio
 async def test_local_capabilities_do_not_escape_to_public_discovery(client):
     _, token = await register(client, "capability-local")
-    local = (await rpc(client, "/im/rpc", "anp.get_capabilities", token=token))["result"]["awiki_local"]
+    legacy = (await rpc(client, "/im/rpc", "anp.get_capabilities", token=token))["result"]
+    assert "awiki_local" not in legacy
+    params = {"meta": {"profile": "anp.core.binding.v1", "security_profile": "transport-protected"},
+              "body": {"capabilities_version": 1}}
+    local = (await rpc(client, "/im/rpc", "anp.get_capabilities", params, token=token))["result"]["awiki_local"]
+    for version in (None, 2, "1", True):
+        invalid = await rpc(client, "/im/rpc", "anp.get_capabilities", {"capabilities_version": version}, token=token)
+        assert invalid["error"]["code"] == -32602
     assert local["capabilities_version"] == 1
     for name in ("sync", "snapshot", "direct", "groups", "attachments"):
         assert local["capabilities"][name]["enabled"] is True

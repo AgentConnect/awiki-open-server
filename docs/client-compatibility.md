@@ -243,7 +243,7 @@ Custom tenants do not automatically discover another tenant’s legacy credentia
 基础内容和站点仍开放，内容数量限制为 5；不将部分 Agent 兼容路由声明成完整产品。
 更新政策明确不提供，客户端不得据此改用官方租户的更新源或清除已缓存最低版本。
 
-已认证 `/im/rpc` 的 `anp.get_capabilities` 增加 `awiki_local`：普通私聊、群聊、附件、
+已认证 `/im/rpc` 的 `anp.get_capabilities` 仅在 `body.capabilities_version=1` 时增加 `awiki_local`：普通私聊、群聊、附件、
 历史、已读、普通 Sync v2、Schema 3 Snapshot、开放加入和管理员添加可用。
 P5/P6、所有加密、邀请及审批关闭；附件大小来自运行配置，群成员/加入数量为既有实际限制。
 匿名兼容发现及公共 `/anp-im/rpc` 不返回此本域扩展；公共 ANP 发现及认证边界不变。
@@ -251,3 +251,6 @@ P5/P6、所有加密、邀请及审批关闭；附件大小来自运行配置，
 
 公开字段合同由 AWiki IM Core API 文档维护；本仓运行、安装和测试不依赖该仓。
 本地验证：`uv run pytest tests/test_registration_discovery.py tests/test_messaging_surface.py tests/test_standard_sync_asgi.py -q`。
+
+
+扩展能力发现使用显式 `body.capabilities_version=1`（兼容入口允许同名扁平字段），未请求时保留旧响应形状。未知/null/字符串/布尔版本返回 InvalidParams。此选择只影响本域 AWiki 能力投影；公共 ANP 发现、普通 Sync 和既有认证边界不变。官方新 Core 的后端能力请求使用此版本，旧客户端继续默认发现。

@@ -276,3 +276,6 @@ ANP SDK version：
 ```
 
 自定义租户不会自动发现其他租户的旧凭据。显式导入旧身份时使用 `awiki-cli --migration id import-v1 --name <name> --credentials-dir <旧凭据目录>`；此参数仅指定本次导入来源，不更改租户配置，也不启动可靠 listener。
+
+
+扩展能力发现使用显式 `body.capabilities_version=1`（兼容入口允许同名扁平字段），未请求时保留旧响应形状。未知/null/字符串/布尔版本返回 InvalidParams。此选择只影响本域 AWiki 能力投影；公共 ANP 发现、普通 Sync 和既有认证边界不变。官方新 Core 的后端能力请求使用此版本，旧客户端继续默认发现。
