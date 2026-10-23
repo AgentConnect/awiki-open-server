@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Single-process Awiki Community Server MVP"
 requires-python = ">=3.10"
 dependencies = [
-  "anp==1.0.6",
+  "anp==1.0.7",
   "base58",
   "cryptography<49",
   "fastapi",
