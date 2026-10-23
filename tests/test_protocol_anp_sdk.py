@@ -90,7 +90,7 @@ def _origin_proof(
     }
 
 
-def test_protocol_adapter_requires_published_anp_sdk_106():
+def test_protocol_adapter_requires_published_anp_sdk_107():
     assert ANP_SDK_VERSION == REQUIRED_ANP_SDK_VERSION == "1.0.7"
 
 
