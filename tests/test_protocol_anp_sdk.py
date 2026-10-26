@@ -90,8 +90,8 @@ def _origin_proof(
     }
 
 
-def test_protocol_adapter_requires_published_anp_sdk_106():
-    assert ANP_SDK_VERSION == REQUIRED_ANP_SDK_VERSION == "1.0.6"
+def test_protocol_adapter_requires_published_anp_sdk_107():
+    assert ANP_SDK_VERSION == REQUIRED_ANP_SDK_VERSION == "1.0.7"
 
 
 def test_service_http_signature_uses_anp_sdk_generation_and_verification():

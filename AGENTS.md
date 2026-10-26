@@ -12,7 +12,7 @@ Install the locked runtime and development dependencies:
 uv sync --group dev
 ```
 
-The project pins ANP Python SDK `anp==1.0.6`; the protocol adapter fails fast when another version is loaded. Use the locked registry dependencies for verification. If the existing environment is stale or used by a running service, select a separate environment with `UV_PROJECT_ENVIRONMENT` and run `uv sync --locked --group dev`; do not silently substitute sibling SDK source through `PYTHONPATH`.
+The project pins ANP Python SDK `anp==1.0.7`; the protocol adapter fails fast when another version is loaded. Use the locked registry dependencies for verification. If the existing environment is stale or used by a running service, select a separate environment with `UV_PROJECT_ENVIRONMENT` and run `uv sync --locked --group dev`; do not silently substitute sibling SDK source through `PYTHONPATH`.
 
 Run the full local suite:
 
